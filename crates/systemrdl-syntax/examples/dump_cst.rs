@@ -1,11 +1,14 @@
 //! Prints the lossless syntax tree for a SystemRDL file.
 //!
-//! The counterpart to the ANTLR crate's `dump-tree`, with one visible
-//! difference: whitespace and comments appear as tokens, because they are in
-//! the tree rather than on a hidden channel.
+//! Whitespace and comments appear as tokens, because they are in the tree
+//! rather than on a hidden channel -- which is what the formatter needs and
+//! what makes this worth looking at when a rule misplaces something.
 //!
-//!     cargo run -p systemrdl-syntax --bin dump-cst -- samples/sample.rdl
-//!     cargo run -p systemrdl-syntax --bin dump-cst -- samples/sample.rdl --no-trivia
+//!     cargo run -p systemrdl-syntax --example dump-cst -- samples/sample.rdl
+//!     cargo run -p systemrdl-syntax --example dump-cst -- samples/sample.rdl --no-trivia
+//!
+//! An example rather than a binary so that the workspace holds exactly one, and
+//! a bare `cargo run` unambiguously means the formatter.
 
 use systemrdl_syntax::{SyntaxElement, SyntaxNode, parse};
 
