@@ -1,0 +1,8 @@
+[package]
+name = "systemrdl-fmt"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rowan = { workspace = true }
+systemrdl-syntax = { path = "../systemrdl-syntax" }

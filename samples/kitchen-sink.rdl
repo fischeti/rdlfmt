@@ -1,0 +1,101 @@
+// Every construct the formatter has a rule for, in the shapes the SystemRDL 2.0
+// spec uses for them. Written in the formatter's own output style: formatting
+// this file must change nothing, which is what `the_output_style_is_a_fixed_point`
+// asserts.
+
+property my_udp {
+    component = field | reg;
+    type = string;
+    default = "x";
+};
+
+struct base {
+    longint unsigned a;
+};
+
+abstract struct derived : base {
+    string b[];
+};
+
+// Struct literals exist to give a struct-typed UDP a value (spec 6.3.2.4).
+property struct_udp {
+    component = field;
+    type = base;
+    default = base'{ a: 1 };
+};
+
+enum my_enum {
+    IDLE = 0;
+    BUSY = 1 {
+        name = "Busy";
+        desc = "The block is busy";
+    };
+};
+
+constraint named_c {
+    this > 0;
+    this inside { 1, 2, [3:4] };
+    this inside my_enum;
+    a = 1;
+};
+
+reg my_reg #(
+    longint unsigned WIDTH = 32,
+    boolean SPLIT = true
+) {
+    regwidth = WIDTH;
+
+    field {
+        sw = rw; hw = r;
+        desc = "Status flags";
+    } STATUS[7:0] = 8'hA5;
+
+    field {} COUNT[15:8] = 0x0;
+};
+
+reg small #(longint unsigned W = 8) {
+    regwidth = W;
+};
+
+addrmap top #(string ext_path = "ext_block") {
+    name = "Top level map";
+    hdl_path = "int_block";
+    default regwidth = 32;
+
+    my_reg ctrl @ 0x0;
+    my_reg data[4] @ 0x10 += 0x4 %= 0x8;
+    small #(.W(16)) s1 @ 0x40;
+    my_reg #(
+        .WIDTH(8),
+        .SPLIT(false)
+    ) s2 @ 0x50;
+    external my_reg ext @ 0x60;
+    alias ctrl my_reg al @ 0x70;
+
+    ctrl.STATUS->sw = rw;
+    ctrl.STATUS->hdl_path_slice = '{ "rtl_f1_1", "rtl_f1_0" };
+
+    // Concatenation builds an HDL path out of a parameter (spec 14.1.2).
+    reg {
+        hdl_path = { ext_path, ".external_reg" };
+
+        field {
+            hdl_path_slice = '{ "field1" };
+        } f1[0:0];
+    } external external_reg @ 0x80;
+
+    constraint {
+        this < 8;
+    } c1, c2;
+};
+
+// The remaining expression forms, which never break however long they get.
+addrmap exprs {
+    a = W * 2 + (X - 1);
+    b = c ? d : e;
+    f = -g;
+    h = bit'(i);
+    j = 32'(k);
+    l = { 2{ m } };
+    n = my_enum::IDLE;
+};

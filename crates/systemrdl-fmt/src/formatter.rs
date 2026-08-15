@@ -1,0 +1,334 @@
+//! The output buffer and the whitespace model.
+//!
+//! # Separation is requested, not written
+//!
+//! No rule ever writes a space or a newline. Instead it *requests* a minimum
+//! separation before whatever is written next, and the request is materialised
+//! lazily when that next thing actually arrives. Requests combine by [`Ord`]:
+//! the strongest one wins.
+//!
+//! Two properties fall out of this, both of which are otherwise fiddly:
+//!
+//! * **No trailing whitespace, ever.** A separation that is never followed by
+//!   content is never written, so a request left pending at the end of a line
+//!   or of the file simply evaporates.
+//! * **Indentation needs no bookkeeping at the call site.** It is emitted as
+//!   part of materialising a newline, so a rule that opens an indent level
+//!   does not have to know which of its children begins a line.
+//!
+//! It also gives the two producers of separation -- layout rules and preserved
+//! trivia -- a way to disagree without either having to know about the other.
+//! A blank line in the source and a rule asking for a plain newline resolve to
+//! a blank line without the rule being consulted.
+//!
+//! # Whitespace is discarded, its signal is not
+//!
+//! Source `WHITESPACE` tokens are never copied to the output; the formatter
+//! regenerates all of it. The one thing they carry that cannot be recomputed is
+//! whether the author left a blank line, so that -- and only that -- is lifted
+//! out as a [`Sep::BlankLine`] request before the token is dropped.
+
+use crate::FormatOptions;
+use rowan::TextSize;
+use systemrdl_syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
+
+/// The minimum separation required before the next thing written.
+///
+/// Variant order is load-bearing: requests combine with [`Ord::max`], so a
+/// stronger request always survives a weaker one regardless of arrival order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Sep {
+    /// Tokens abut: `8'hA5`, `foo[`.
+    None,
+    /// A single space: around `=`, between `reg` and its name.
+    Space,
+    /// End the line.
+    Newline,
+    /// End the line and leave one empty line behind.
+    BlankLine,
+}
+
+pub(crate) struct Formatter<'a> {
+    /// Kept so that [`Formatter::verbatim`] can slice out a node's original
+    /// text by byte range. Once every kind has a rule this goes away.
+    src: &'a str,
+    opts: &'a FormatOptions,
+    out: String,
+    /// Current indentation depth, in levels rather than columns.
+    indent: usize,
+    pending: Sep,
+    /// Whether a newline has been seen in the source since the last real
+    /// token. This is how a comment tells a trailing annotation (`sw = rw; //
+    /// writable`) from one that introduces what follows.
+    saw_newline: bool,
+    /// Whether the last thing written was a comment still waiting to find out
+    /// what separated it from what follows. See [`Formatter::trivia`].
+    after_comment: bool,
+    /// Whether a blank line would currently be spurious. See
+    /// [`Formatter::suppress_blank_line`].
+    no_blank_line: bool,
+}
+
+impl<'a> Formatter<'a> {
+    pub(crate) fn new(src: &'a str, opts: &'a FormatOptions) -> Self {
+        Formatter {
+            src,
+            opts,
+            out: String::with_capacity(src.len()),
+            indent: 0,
+            pending: Sep::None,
+            saw_newline: false,
+            after_comment: false,
+            no_blank_line: false,
+        }
+    }
+
+    /// Finishes the file: exactly one trailing newline, or nothing at all if
+    /// there was no content.
+    pub(crate) fn finish(mut self) -> String {
+        let trimmed = self.out.trim_end().len();
+        self.out.truncate(trimmed);
+        if !self.out.is_empty() {
+            self.out.push('\n');
+        }
+        self.out
+    }
+
+    //----------------------------------------------------------------------
+    // Separation
+    //----------------------------------------------------------------------
+
+    /// Asks for at least `sep` before the next thing written.
+    pub(crate) fn request(&mut self, sep: Sep) {
+        let sep = if self.no_blank_line && sep == Sep::BlankLine {
+            Sep::Newline
+        } else {
+            sep
+        };
+        self.pending = self.pending.max(sep);
+    }
+
+    /// Forces the separation to exactly `sep`, overriding what has been asked
+    /// for so far.
+    ///
+    /// The counterpart to [`Formatter::request`], for the cases where the
+    /// accumulated minimum is not merely too weak but wrong: a blank line
+    /// directly inside a closing brace is an artefact of editing rather than a
+    /// grouping the author chose, and a trailing comment belongs on the line it
+    /// annotates however much the enclosing rule wanted a break there.
+    pub(crate) fn pin(&mut self, sep: Sep) {
+        self.pending = sep;
+    }
+
+    /// Downgrades the *next* blank-line request to a plain newline.
+    ///
+    /// Needed because the whitespace after an opening brace is not a child of
+    /// the braced node -- the parser hands trivia to the item that follows it,
+    /// so it arrives partway down a recursion the rule has already entered, too
+    /// late for [`Formatter::clamp`] to reach. The flag is cleared as soon as
+    /// anything is written, so it applies to that one gap and no further.
+    pub(crate) fn suppress_blank_line(&mut self) {
+        self.no_blank_line = true;
+    }
+
+    //----------------------------------------------------------------------
+    // Indentation
+    //----------------------------------------------------------------------
+
+    pub(crate) fn indent(&mut self) {
+        self.indent += 1;
+    }
+
+    pub(crate) fn dedent(&mut self) {
+        self.indent = self.indent.saturating_sub(1);
+    }
+
+    fn materialize(&mut self) {
+        let sep = std::mem::replace(&mut self.pending, Sep::None);
+        // Nothing to separate from. This is what keeps a leading comment from
+        // being pushed off the first line by the newline the caller requested
+        // before it.
+        if self.out.is_empty() {
+            return;
+        }
+        match sep {
+            Sep::None => {}
+            Sep::Space => self.out.push(' '),
+            Sep::Newline => self.newline(1),
+            Sep::BlankLine => self.newline(2),
+        }
+    }
+
+    fn newline(&mut self, count: usize) {
+        for _ in 0..count {
+            self.out.push('\n');
+        }
+        for _ in 0..self.indent * self.opts.indent_width {
+            self.out.push(' ');
+        }
+    }
+
+    //----------------------------------------------------------------------
+    // Writing
+    //----------------------------------------------------------------------
+
+    /// Writes `text` after materialising any pending separation.
+    ///
+    /// The text is emitted exactly as given; nothing here inspects it, so a
+    /// caller passing multi-line text owns its interior indentation.
+    fn write_raw(&mut self, text: &str) {
+        self.materialize();
+        self.out.push_str(text);
+        self.no_blank_line = false;
+    }
+
+    /// Writes a significant token verbatim.
+    ///
+    /// Token text is always copied rather than reconstructed from the kind:
+    /// several kinds have more than one spelling (`~^` and `^~` are both
+    /// `XNOR`, `0xA5` and `0xa5` are both `HEX_NUMBER`), and which one the
+    /// author wrote is not the formatter's business.
+    pub(crate) fn token(&mut self, tok: &SyntaxToken) {
+        debug_assert!(!tok.kind().is_trivia(), "trivia must go through trivia()");
+        self.write_raw(tok.text());
+        self.saw_newline = false;
+        self.after_comment = false;
+    }
+
+    /// Handles one trivia token: drops whitespace, keeps comments.
+    pub(crate) fn trivia(&mut self, tok: &SyntaxToken) {
+        match tok.kind() {
+            SyntaxKind::WHITESPACE => {
+                let newlines = tok.text().bytes().filter(|&b| b == b'\n').count();
+                // Two newlines means one empty line between them. Anything
+                // more collapses to the same request, which is how runs of
+                // blank lines get capped.
+                if newlines >= 2 {
+                    self.request(Sep::BlankLine);
+                } else if newlines == 1 && self.after_comment {
+                    // The one case where a plain source line break survives.
+                    // Line breaks are otherwise the rules' decision -- honour
+                    // them in general and nothing would ever be normalised --
+                    // but a comment's trailing side has no rule to consult, and
+                    // whether it ended the line is the author's to say.
+                    self.request(Sep::Newline);
+                }
+                self.saw_newline |= newlines >= 1;
+            }
+            kind if kind.is_comment() => {
+                // A comment that followed a newline in the source introduces
+                // what comes after it and belongs on its own line. One that did
+                // not is annotating the token it trails, and stays beside it.
+                if self.saw_newline {
+                    self.request(Sep::Newline);
+                } else if kind == SyntaxKind::LINE_COMMENT {
+                    // Pinned rather than requested, because the enclosing rule
+                    // has often already asked for a break: the parser hands a
+                    // comment to the item that *follows* it, so `reg r { // why`
+                    // reaches this point with the body's newline-before-each-
+                    // item already pending, and a mere request would lose to it.
+                    //
+                    // Overriding is safe only for a line comment, which runs to
+                    // the end of its line: nothing can follow it there, so
+                    // pinning can never pull the next statement up beside it.
+                    self.pin(Sep::Space);
+                } else {
+                    self.request(Sep::Space);
+                }
+                self.write_raw(tok.text());
+                if kind == SyntaxKind::LINE_COMMENT {
+                    // A line comment swallows the rest of its line, so anything
+                    // after it *must* start a new one. Getting this wrong
+                    // comments out code, which is why it is unconditional here
+                    // rather than left to the rules.
+                    self.request(Sep::Newline);
+                } else {
+                    // A block comment may legally be followed on the same line,
+                    // so this is only a floor: it keeps `*/` from abutting the
+                    // next token, and the whitespace arm above raises it to a
+                    // newline if the author ended the line there.
+                    self.request(Sep::Space);
+                }
+                self.saw_newline = false;
+                self.after_comment = true;
+            }
+            kind => unreachable!("not trivia: {kind:?}"),
+        }
+    }
+
+    /// Reproduces `node` exactly as it appears in the source.
+    ///
+    /// This began as the fallback for kinds without a rule yet, which is what
+    /// made the formatter runnable and testable from its first commit. Every
+    /// kind now has one except [`SyntaxKind::ERROR`], and an `ERROR` node exists
+    /// only where the parser recorded an error, which [`crate::format`] refuses
+    /// outright -- so nothing reaches this in a successful format.
+    ///
+    /// Kept because it is the right answer for the case it is left holding:
+    /// input the parser could not understand should be handed back untouched
+    /// rather than reshaped by rules that assume a structure it does not have.
+    /// An error-tolerant mode would need exactly this.
+    ///
+    /// Trivia at either end is routed through [`Formatter::trivia`] rather than
+    /// dumped with the rest: it belongs to the *surrounding* layout, not to the
+    /// node. Leaving leading trivia in the span would emit the source's
+    /// indentation alongside the indentation just generated, and leaving
+    /// trailing trivia in it would preserve the column padding in front of a
+    /// trailing comment, which is exactly the alignment the formatter exists to
+    /// stop maintaining by hand.
+    ///
+    /// The *interior* does keep its original whitespace, so a construct spread
+    /// over several lines keeps the indentation it was written with even when
+    /// emitted at a different depth. Every construct that normally spans lines
+    /// -- anything with a braced body -- has a real rule, so this is reachable
+    /// only via a hand-wrapped statement, and it shrinks with each rule added.
+    pub(crate) fn verbatim(&mut self, node: &SyntaxNode) {
+        let src = self.src;
+        let mut start = node.text_range().start();
+        let mut end = node.text_range().end();
+
+        for tok in leading_trivia(node) {
+            self.trivia(&tok);
+            start = tok.text_range().end();
+        }
+        // Bounded below by `start` so that a node which is *entirely* trivia
+        // has it emitted once, by the loop above, rather than twice.
+        let trailing = trailing_trivia(node, start);
+        if let Some(first) = trailing.first() {
+            end = first.text_range().start();
+        }
+
+        if start < end {
+            self.write_raw(&src[usize::from(start)..usize::from(end)]);
+            self.saw_newline = false;
+            self.after_comment = false;
+        }
+        for tok in &trailing {
+            self.trivia(tok);
+        }
+    }
+}
+
+/// The run of trivia at the very start of `node`.
+///
+/// Leading trivia sits on the leftmost leaf, however deep that is -- the block
+/// comment before `reg my_reg` lands three levels down, inside `COMPONENT_TYPE`
+/// -- so this walks the token stream rather than the node's direct children.
+fn leading_trivia(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
+    let end = node.text_range().end();
+    std::iter::successors(node.first_token(), |tok: &SyntaxToken| tok.next_token())
+        .take_while(move |tok| tok.text_range().end() <= end && tok.kind().is_trivia())
+}
+
+/// The run of trivia at the end of `node`, in source order.
+///
+/// `floor` bounds the search from below, so that trivia already emitted as
+/// leading is not emitted a second time here.
+fn trailing_trivia(node: &SyntaxNode, floor: TextSize) -> Vec<SyntaxToken> {
+    let mut out: Vec<SyntaxToken> =
+        std::iter::successors(node.last_token(), |tok: &SyntaxToken| tok.prev_token())
+            .take_while(|tok| tok.text_range().start() >= floor && tok.kind().is_trivia())
+            .collect();
+    out.reverse();
+    out
+}
