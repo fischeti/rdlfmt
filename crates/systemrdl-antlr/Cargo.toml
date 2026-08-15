@@ -1,0 +1,24 @@
+# The original ANTLR-based front end, kept as a reference implementation.
+#
+# The formatter itself is being rebuilt on `systemrdl-syntax` (logos + rowan),
+# because a HIDDEN-channel token stream cannot express the trivia attachment a
+# formatter needs. This crate stays in the workspace so it keeps compiling and
+# so `SystemRDL.g4` remains the point of comparison for grammar fidelity -- the
+# reference SystemRDL compiler is ANTLR-based and its grammar is the spec's own
+# artifact.
+[package]
+name = "systemrdl-antlr"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Must match the `check_version(..)` call in the generated parser/lexer.
+antlr4rust = "0.5.2"
+
+[[bin]]
+name = "dump-tokens"
+path = "src/bin/dump_tokens.rs"
+
+[[bin]]
+name = "dump-tree"
+path = "src/bin/dump_tree.rs"

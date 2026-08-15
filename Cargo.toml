@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["crates/systemrdl-antlr", "crates/systemrdl-syntax"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+logos = "0.16.1"
+rowan = "0.17.0"

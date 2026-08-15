@@ -1,0 +1,12 @@
+[package]
+name = "systemrdl-syntax"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+logos = { workspace = true }
+rowan = { workspace = true }
+
+[[bin]]
+name = "dump-cst"
+path = "src/bin/dump_cst.rs"

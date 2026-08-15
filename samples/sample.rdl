@@ -1,0 +1,40 @@
+// A small but representative SystemRDL file.
+// It deliberately exercises every interesting lexer rule: both comment styles,
+// keywords, plain and escaped identifiers, all three integer literal forms,
+// strings, and a spread of operators.
+
+property my_prop {
+    component = field;
+    type = string;
+};
+
+/* Multi-line comment.
+   The whole thing -- newlines and all -- becomes a single ML_COMMENT token
+   on the hidden channel, which is exactly what a formatter needs. */
+reg my_reg #(longint unsigned WIDTH = 32, boolean SPLIT = true) {
+    regwidth = WIDTH;
+
+    field {
+        sw = rw;                       // software may read and write
+        hw = r;
+        desc = "Status flags for the block";
+    } STATUS[7:0] = 8'hA5;
+
+    field {
+        sw = rw;
+        hw = w;
+        onwrite = woclr;
+    } COUNT[15:8] = 0x0;
+};
+
+addrmap top {
+    name = "Top level map";
+    default regwidth = 32;
+
+    my_reg ctrl @ 0x0;
+    my_reg data[4] @ 0x10 += 0x4;
+
+    // `\reg` is an escaped identifier: the backslash lets a keyword be reused
+    // as an instance name. Note the lexer emits ID here, not REG_kw.
+    my_reg \reg @ 0x40;
+};
