@@ -173,6 +173,78 @@ fn check_exits_zero_when_everything_is_formatted() {
 }
 
 //--------------------------------------------------------------------------
+// --diff
+//--------------------------------------------------------------------------
+
+#[test]
+fn diff_shows_the_change_and_exits_one() {
+    let dir = TempDir::new("diff");
+    let path = dir.write("a.rdl", UNFORMATTED);
+
+    let out = run(&["--diff", path.to_str().unwrap()]);
+    assert_eq!(code(&out), 1, "--diff reports like --check");
+    assert_eq!(dir.read("a.rdl"), UNFORMATTED, "--diff modified the file");
+
+    let text = stdout(&out);
+    assert!(text.contains("a.rdl at line 1:"), "no hunk header: {text}");
+    assert!(
+        text.contains("-addrmap a{name=\"x\";};"),
+        "no removed line: {text}"
+    );
+    assert!(text.contains("+addrmap a {"), "no added line: {text}");
+}
+
+#[test]
+fn diff_prints_nothing_when_already_formatted() {
+    let dir = TempDir::new("diff-clean");
+    let path = dir.write("a.rdl", FORMATTED);
+
+    let out = run(&["--diff", path.to_str().unwrap()]);
+    assert_eq!(code(&out), 0);
+    assert_eq!(stdout(&out), "");
+}
+
+#[test]
+fn diff_keeps_unchanged_lines_as_context() {
+    // The value of a diff over `--check` is seeing the change in place, so the
+    // surrounding lines have to survive -- with a leading space, not a sign.
+    let dir = TempDir::new("diff-context");
+    let mut src = String::from("addrmap a {\n");
+    for i in 0..10 {
+        src.push_str(&format!("    p{i} = {i};\n"));
+    }
+    src.push_str("    bad   =   1;\n};\n");
+    let path = dir.write("a.rdl", &src);
+
+    let out = run(&["--diff", path.to_str().unwrap()]);
+    assert_eq!(code(&out), 1);
+
+    let text = stdout(&out);
+    assert!(text.contains(" };"), "closing brace not shown as context");
+    assert!(
+        !text.contains("p0"),
+        "distant lines should be outside the context window: {text}"
+    );
+}
+
+#[test]
+fn diff_output_is_uncoloured_when_piped() {
+    // Tests capture stdout through a pipe, so this is the real check that a
+    // redirected diff stays machine-readable.
+    let dir = TempDir::new("diff-color");
+    let path = dir.write("a.rdl", UNFORMATTED);
+
+    let out = run(&["--diff", path.to_str().unwrap()]);
+    assert!(!stdout(&out).contains('\x1b'), "escape sequences in a pipe");
+}
+
+#[test]
+fn diff_and_check_conflict() {
+    let out = run(&["--diff", "--check"]);
+    assert_eq!(code(&out), 2);
+}
+
+//--------------------------------------------------------------------------
 // Directories and failures
 //--------------------------------------------------------------------------
 

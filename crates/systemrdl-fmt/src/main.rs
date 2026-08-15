@@ -5,13 +5,15 @@
 //! `systemrdl-fmt foo.rdl` rewrites `foo.rdl`. There is no `--write` flag,
 //! because the overwhelmingly common thing to want is formatted files, and a
 //! flag that is passed every single time is not carrying information -- the
-//! same call rustfmt, black and ruff make. `--check` and `--stdout` are there
-//! for the times you want something else.
+//! same call rustfmt, black and ruff make. `--check`, `--diff` and `--stdout`
+//! are there for the times you want something else.
 //!
 //! What makes that defensible is not this file: [`systemrdl_fmt::format_with`]
 //! verifies its own output before returning it, so a file is only ever replaced
 //! by one that lexes to the same code.
-//!
+
+mod diff;
+
 use clap::Parser;
 use clap::builder::styling::{AnsiColor, Effects, Styles};
 use std::io::{Read, Write};
@@ -50,8 +52,12 @@ struct Cli {
     #[arg(short, long)]
     check: bool,
 
+    /// Like --check, but show what would change
+    #[arg(short, long, conflicts_with = "check")]
+    diff: bool,
+
     /// Write to stdout instead of rewriting the file
-    #[arg(long, conflicts_with = "check")]
+    #[arg(long, conflicts_with_all = ["check", "diff"])]
     stdout: bool,
 
     /// Spaces per indentation level
@@ -64,6 +70,8 @@ struct Cli {
 enum Mode {
     Write,
     Check,
+    /// `Check` that says what it found.
+    Diff,
     Stdout,
 }
 
@@ -73,11 +81,14 @@ fn main() -> ExitCode {
     let mut run = Run {
         mode: if cli.check {
             Mode::Check
+        } else if cli.diff {
+            Mode::Diff
         } else if cli.stdout {
             Mode::Stdout
         } else {
             Mode::Write
         },
+        palette: diff::Palette::for_stream(&std::io::stdout()),
         options: FormatOptions {
             indent_width: cli.indent,
         },
@@ -107,8 +118,9 @@ fn main() -> ExitCode {
 
 struct Run {
     mode: Mode,
+    palette: diff::Palette,
     options: FormatOptions,
-    /// Files that are not formatted. Only counted under `--check`.
+    /// Files that are not formatted. Only counted under `--check` and `--diff`.
     needs_formatting: usize,
     formatted: usize,
     failed: usize,
@@ -135,12 +147,27 @@ impl Run {
                     self.failed += 1;
                 }
             }
-            Mode::Check => {
-                if out != src {
-                    println!("<stdin> is not formatted");
-                    self.needs_formatting += 1;
-                }
+            Mode::Check | Mode::Diff => self.report(Path::new("<stdin>"), &src, &out),
+        }
+    }
+
+    /// Notes that `path` is not formatted, in whatever detail the mode asks
+    /// for. Silent when there is nothing to say, so that a clean run of
+    /// `--check` or `--diff` prints nothing at all.
+    fn report(&mut self, path: &Path, src: &str, out: &str) {
+        if out == src {
+            return;
+        }
+        self.needs_formatting += 1;
+
+        if self.mode == Mode::Diff {
+            let mut stdout = std::io::stdout().lock();
+            if let Err(err) = diff::write(&mut stdout, path, src, out, &self.palette) {
+                eprintln!("error: writing stdout: {err}");
+                self.failed += 1;
             }
+        } else {
+            println!("{} is not formatted", path.display());
         }
     }
 
@@ -183,12 +210,7 @@ impl Run {
                     self.failed += 1;
                 }
             }
-            Mode::Check => {
-                if out != src {
-                    println!("{} is not formatted", path.display());
-                    self.needs_formatting += 1;
-                }
-            }
+            Mode::Check | Mode::Diff => self.report(path, &src, &out),
             Mode::Write => {
                 // An unchanged file is left alone rather than rewritten with
                 // identical bytes, so that formatting a tree does not touch
