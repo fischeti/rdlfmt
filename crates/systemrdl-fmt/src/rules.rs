@@ -193,7 +193,7 @@ fn braced_body(f: &mut Formatter, node: &SyntaxNode) {
             NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::L_BRACE => {
                 f.token(&tok);
                 f.indent();
-                f.suppress_blank_line();
+                f.settle_width();
             }
             NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::R_BRACE => {
                 f.dedent();
@@ -457,7 +457,7 @@ fn broken_list(f: &mut Formatter, node: &SyntaxNode) {
             NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::L_PAREN => {
                 f.token(&tok);
                 f.indent();
-                f.suppress_blank_line();
+                f.settle_width();
             }
             NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::R_PAREN => {
                 f.dedent();

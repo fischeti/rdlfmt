@@ -7,6 +7,11 @@
 //! lazily when that next thing actually arrives. Requests combine by [`Ord`]:
 //! the strongest one wins.
 //!
+//! Everything said about the space between two things accumulates in one value,
+//! the [`Gap`], which is spent and reset the moment something is written. That
+//! is the whole of the mutable whitespace state: a rule can only speak about
+//! the gap now open, and nothing it says can outlive it.
+//!
 //! Two properties fall out of this, both of which are otherwise fiddly:
 //!
 //! * **No trailing whitespace, ever.** A separation that is never followed by
@@ -28,16 +33,17 @@
 //! whether the author left a blank line, so that -- and only that -- is lifted
 //! out before the token is dropped.
 //!
-//! It is lifted out as a *widening* of the gap rather than as a separation in
-//! its own right, because a blank line is a bigger line break and not something
+//! It is lifted out as the gap's [`Width`] rather than as a separation in its
+//! own right, because a blank line is a bigger line break and not something
 //! that can stand where there was to be no break at all. Whether a gap is a
 //! break is the enclosing rule's decision; the author's blank line only says
 //! how wide it should be once the rule has decided on one. That is what keeps
 //! `addrmap top` and a `{` written two lines below it on one line: the gap in
 //! front of a brace is a space however many newlines were typed into it.
 //!
-//! Where a break *is* the author's to widen is a separate question, answered by
-//! [`Formatter::allow_blank_lines`].
+//! Where a break *is* the author's to widen is a separate question -- policy
+//! for a whole region rather than state of one gap -- and the one thing here
+//! that outlives a gap. See [`Formatter::allow_blank_lines`].
 
 use rowan::TextSize;
 use systemrdl_syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
@@ -53,14 +59,48 @@ const INDENT_WIDTH: usize = 4;
 ///
 /// Variant order is load-bearing: requests combine with [`Ord::max`], so a
 /// stronger request always survives a weaker one regardless of arrival order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Sep {
     /// Tokens abut: `8'hA5`, `foo[`.
+    #[default]
     None,
     /// A single space: around `=`, between `reg` and its name.
     Space,
     /// End the line.
     Newline,
+}
+
+/// How wide the gap should be *if* it turns out to be a line break.
+///
+/// The second axis of a gap, and deliberately not part of the [`Sep`] lattice:
+/// a blank line is a bigger break, not a break in its own right, so it can only
+/// widen a break someone else decided on. Ordering it above [`Sep::Newline`]
+/// and taking the max would let a blank line typed in front of a `{` strand the
+/// brace on a line of its own.
+///
+/// Three states rather than a pair of flags, because two booleans would admit a
+/// fourth that means nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Width {
+    /// Nobody has spoken for it. A blank line in the source still can.
+    #[default]
+    Open,
+    /// The author left a blank line here.
+    Blank,
+    /// A rule has settled it: one line break, whatever the source had.
+    Settled,
+}
+
+/// The separation accumulating in front of whatever is written next.
+///
+/// One value with one lifetime: it is built up by requests and by the author's
+/// whitespace, spent by [`Formatter::materialize`], and reset there -- which is
+/// what keeps a decision about one gap from leaking into the next without
+/// anyone having to clear a flag by hand.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Gap {
+    sep: Sep,
+    width: Width,
 }
 
 pub(crate) struct Formatter<'a> {
@@ -70,10 +110,12 @@ pub(crate) struct Formatter<'a> {
     out: String,
     /// Current indentation depth, in levels rather than columns.
     indent: usize,
-    pending: Sep,
-    /// Whether the author left a blank line in the gap now open. Applied only
-    /// if that gap turns out to be a line break; see [`Formatter::blank_line`].
-    blank: bool,
+    /// The gap in front of the next thing written.
+    gap: Gap,
+    /// Whether blank lines mean anything where we currently are. Policy for a
+    /// whole region rather than state of one gap, which is why it sits out here
+    /// and survives being spent; see [`Formatter::allow_blank_lines`].
+    blank_lines: bool,
     /// Whether a newline has been seen in the source since the last real
     /// token. This is how a comment tells a trailing annotation (`sw = rw; //
     /// writable`) from one that introduces what follows.
@@ -81,12 +123,6 @@ pub(crate) struct Formatter<'a> {
     /// Whether the last thing written was a comment still waiting to find out
     /// what separated it from what follows. See [`Formatter::trivia`].
     after_comment: bool,
-    /// Whether a blank line would currently be spurious. See
-    /// [`Formatter::suppress_blank_line`].
-    no_blank_line: bool,
-    /// Whether blank lines mean anything where we currently are. See
-    /// [`Formatter::allow_blank_lines`].
-    blank_lines: bool,
 }
 
 impl<'a> Formatter<'a> {
@@ -95,12 +131,10 @@ impl<'a> Formatter<'a> {
             src,
             out: String::with_capacity(src.len()),
             indent: 0,
-            pending: Sep::None,
-            blank: false,
+            gap: Gap::default(),
+            blank_lines: true,
             saw_newline: false,
             after_comment: false,
-            no_blank_line: false,
-            blank_lines: true,
         }
     }
 
@@ -121,51 +155,59 @@ impl<'a> Formatter<'a> {
 
     /// Asks for at least `sep` before the next thing written.
     pub(crate) fn request(&mut self, sep: Sep) {
-        self.pending = self.pending.max(sep);
+        self.gap.sep = self.gap.sep.max(sep);
     }
 
     /// Notes that the author left a blank line in the gap now open.
     ///
-    /// Not a request, and deliberately outside the [`Sep`] lattice: a blank
-    /// line is a line break made wider, so it has nothing to say about a gap
-    /// that no rule has decided to break. If the pending separation is still a
-    /// space or nothing by the time something is written, this is discarded
-    /// along with the rest of the whitespace it came from.
+    /// Not a request: it widens the gap rather than opening one, and if the
+    /// separation is still a space or nothing by the time something is written,
+    /// this is discarded along with the rest of the whitespace it came from.
+    ///
+    /// Ignored where a rule has already settled the width, and where blank
+    /// lines carry nothing worth keeping. Both are checked here rather than at
+    /// the call site because there is only one call site: whitespace, which
+    /// knows what the author typed and nothing about where it landed.
     pub(crate) fn blank_line(&mut self) {
-        self.blank = self.blank_lines && !self.no_blank_line;
+        if self.blank_lines && self.gap.width == Width::Open {
+            self.gap.width = Width::Blank;
+        }
     }
 
-    /// Forces the separation to exactly `sep`, overriding what has been asked
-    /// for so far -- a blank line noted for this gap included.
+    /// Forces the separation to exactly `sep`, and settles the width with it.
     ///
     /// The counterpart to [`Formatter::request`], for the cases where the
-    /// accumulated minimum is not merely too weak but wrong: a blank line
-    /// directly inside a closing brace is an artefact of editing rather than a
-    /// grouping the author chose, and a trailing comment belongs on the line it
-    /// annotates however much the enclosing rule wanted a break there.
+    /// accumulated minimum is not merely too weak but wrong: a trailing comment
+    /// belongs on the line it annotates however much the enclosing rule wanted
+    /// a break there, and a closing brace starts a line whatever the last item
+    /// left pending.
     pub(crate) fn pin(&mut self, sep: Sep) {
-        self.pending = sep;
-        self.blank = false;
+        self.gap = Gap {
+            sep,
+            width: Width::Settled,
+        };
     }
 
-    /// Ignores a blank line in the *next* gap.
+    /// Settles the width of the gap now open without touching its separation.
     ///
-    /// Needed because the whitespace after an opening brace is not a child of
-    /// the braced node -- the parser hands trivia to the item that follows it,
-    /// so it arrives partway down a recursion the rule has already entered, too
-    /// late for the rule to [`pin`](Formatter::pin) over. The flag is cleared as
-    /// soon as anything is written, so it applies to that one gap and no
-    /// further.
-    pub(crate) fn suppress_blank_line(&mut self) {
-        self.no_blank_line = true;
+    /// [`pin`](Formatter::pin) with no opinion on whether the gap breaks, for
+    /// the one place that cannot use it: the whitespace after an opening brace
+    /// is not a child of the braced node -- the parser hands trivia to the item
+    /// that follows it -- so it arrives partway down a recursion the rule has
+    /// already entered, by which time saying `Sep::Newline` would be guessing at
+    /// what that item wanted.
+    ///
+    /// Spent with the gap, so it speaks for that one gap and no further.
+    pub(crate) fn settle_width(&mut self) {
+        self.gap.width = Width::Settled;
     }
 
     /// Sets whether blank lines survive in the region being formatted, and
     /// returns the previous setting for the caller to restore.
     ///
-    /// The counterpart to [`Formatter::suppress_blank_line`], which speaks for
-    /// one gap; this speaks for everything nested inside a construct, which is
-    /// what it takes to cover gaps that arrive several levels down.
+    /// The counterpart to [`Formatter::settle_width`], which speaks for one
+    /// gap; this speaks for everything nested inside a construct, which is what
+    /// it takes to cover gaps that arrive several levels down.
     ///
     /// A blank line is grouping, and grouping says something only between
     /// things that stand on their own. Statements do, so a body keeps them:
@@ -191,20 +233,19 @@ impl<'a> Formatter<'a> {
     }
 
     fn materialize(&mut self) {
-        let sep = std::mem::replace(&mut self.pending, Sep::None);
-        // Taken whether or not it is used: a blank line describes one gap, and
-        // a gap that turns out not to break is the end of it.
-        let blank = std::mem::take(&mut self.blank);
+        // Taken whether or not it is used: a gap describes the space between
+        // two things, and once one of them is written it is spent either way.
+        let gap = std::mem::take(&mut self.gap);
         // Nothing to separate from. This is what keeps a leading comment from
         // being pushed off the first line by the newline the caller requested
         // before it.
         if self.out.is_empty() {
             return;
         }
-        match sep {
+        match gap.sep {
             Sep::None => {}
             Sep::Space => self.out.push(' '),
-            Sep::Newline => self.newline(if blank { 2 } else { 1 }),
+            Sep::Newline => self.newline(if gap.width == Width::Blank { 2 } else { 1 }),
         }
     }
 
@@ -228,7 +269,6 @@ impl<'a> Formatter<'a> {
     fn write_raw(&mut self, text: &str) {
         self.materialize();
         self.out.push_str(text);
-        self.no_blank_line = false;
     }
 
     /// Writes a significant token verbatim.
