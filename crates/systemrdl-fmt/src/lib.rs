@@ -41,20 +41,6 @@ mod rules;
 use formatter::Formatter;
 use systemrdl_syntax::{ParseError, SyntaxKind, lex, parse};
 
-/// Knobs. Deliberately few -- a formatter earns its value by ending arguments,
-/// not by relocating them into a config file.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FormatOptions {
-    /// Spaces per indentation level. The style guide says four.
-    pub indent_width: usize,
-}
-
-impl Default for FormatOptions {
-    fn default() -> Self {
-        FormatOptions { indent_width: 4 }
-    }
-}
-
 /// Why no formatted output was produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormatError {
@@ -102,12 +88,11 @@ impl std::fmt::Display for FormatError {
 
 impl std::error::Error for FormatError {}
 
-/// Formats SystemRDL source with the default options.
-pub fn format(src: &str) -> Result<String, FormatError> {
-    format_with(src, &FormatOptions::default())
-}
-
 /// Formats SystemRDL source.
+///
+/// There is nothing to configure, deliberately: a formatter earns its value by
+/// ending arguments, not by relocating them into a config file. Indentation is
+/// four spaces, which is what the PeakRDL style guide asks for.
 ///
 /// The output is verified before it is returned: see [`verify`]. A caller that
 /// gets `Ok` has a guarantee, not just a hope, that only whitespace moved.
@@ -118,13 +103,13 @@ pub fn format(src: &str) -> Result<String, FormatError> {
 /// that a broken file is never silently mistaken for a formatted one.
 ///
 /// [`FormatError::Corrupted`] if the formatter has a bug.
-pub fn format_with(src: &str, opts: &FormatOptions) -> Result<String, FormatError> {
+pub fn format(src: &str) -> Result<String, FormatError> {
     let parsed = parse(src);
     if !parsed.errors().is_empty() {
         return Err(FormatError::Parse(parsed.errors().to_vec()));
     }
 
-    let mut f = Formatter::new(src, opts);
+    let mut f = Formatter::new(src);
     rules::format_node(&mut f, &parsed.syntax());
     let out = f.finish();
 

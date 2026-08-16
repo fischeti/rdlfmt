@@ -8,7 +8,7 @@
 //! same call rustfmt, black and ruff make. `--check`, `--diff` and `--stdout`
 //! are there for the times you want something else.
 //!
-//! What makes that defensible is not this file: [`systemrdl_fmt::format_with`]
+//! What makes that defensible is not this file: [`systemrdl_fmt::format`]
 //! verifies its own output before returning it, so a file is only ever replaced
 //! by one that lexes to the same code.
 
@@ -19,7 +19,6 @@ use clap::builder::styling::{AnsiColor, Effects, Styles};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use systemrdl_fmt::{FormatOptions, format_with};
 
 /// Cargo's palette, which is what a Rust toolchain user's eye is already
 /// calibrated to. `clap` turns colour off on its own when stdout is not a
@@ -59,10 +58,6 @@ struct Cli {
     /// Write to stdout instead of rewriting the file
     #[arg(long, conflicts_with_all = ["check", "diff"])]
     stdout: bool,
-
-    /// Spaces per indentation level
-    #[arg(long, value_name = "N", default_value_t = 4)]
-    indent: usize,
 }
 
 /// What to do with the formatted text.
@@ -89,9 +84,6 @@ fn main() -> ExitCode {
             Mode::Write
         },
         palette: diff::Palette::for_stream(&std::io::stdout()),
-        options: FormatOptions {
-            indent_width: cli.indent,
-        },
         needs_formatting: 0,
         formatted: 0,
         failed: 0,
@@ -119,7 +111,6 @@ fn main() -> ExitCode {
 struct Run {
     mode: Mode,
     palette: diff::Palette,
-    options: FormatOptions,
     /// Files that are not formatted. Only counted under `--check` and `--diff`.
     needs_formatting: usize,
     formatted: usize,
@@ -231,7 +222,7 @@ impl Run {
 
     /// Formats `src`, reporting any error against `path`.
     fn format(&mut self, src: &str, path: &Path) -> Option<String> {
-        match format_with(src, &self.options) {
+        match systemrdl_fmt::format(src) {
             Ok(out) => Some(out),
             Err(err) => {
                 for error in err.errors() {

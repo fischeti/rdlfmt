@@ -307,10 +307,11 @@ fn a_missing_path_is_an_error() {
 //--------------------------------------------------------------------------
 
 #[test]
-fn indent_width_is_configurable() {
+fn indent_width_is_not_an_argument() {
+    // Four spaces, and no flag to say otherwise: the style is the product.
     let out = pipe(UNFORMATTED, &["--indent", "2"]);
-    assert_eq!(code(&out), 0);
-    assert_eq!(stdout(&out), "addrmap a {\n  name = \"x\";\n};\n");
+    assert_eq!(code(&out), 2, "a usage error is exit 2, like any other");
+    assert_eq!(stdout(&pipe(UNFORMATTED, &[])), FORMATTED);
 }
 
 #[test]

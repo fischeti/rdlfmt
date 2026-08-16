@@ -36,9 +36,15 @@
 //! `addrmap top` and a `{` written two lines below it on one line: the gap in
 //! front of a brace is a space however many newlines were typed into it.
 
-use crate::FormatOptions;
 use rowan::TextSize;
 use systemrdl_syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
+
+/// Spaces per indentation level, as the PeakRDL style guide asks for.
+///
+/// A constant rather than an option: an indent width is the kind of setting
+/// that exists only to be argued over, and every file the formatter touches
+/// having the same one is the point of running it.
+const INDENT_WIDTH: usize = 4;
 
 /// The minimum separation required before the next thing written.
 ///
@@ -58,7 +64,6 @@ pub(crate) struct Formatter<'a> {
     /// Kept so that [`Formatter::verbatim`] can slice out a node's original
     /// text by byte range. Once every kind has a rule this goes away.
     src: &'a str,
-    opts: &'a FormatOptions,
     out: String,
     /// Current indentation depth, in levels rather than columns.
     indent: usize,
@@ -79,10 +84,9 @@ pub(crate) struct Formatter<'a> {
 }
 
 impl<'a> Formatter<'a> {
-    pub(crate) fn new(src: &'a str, opts: &'a FormatOptions) -> Self {
+    pub(crate) fn new(src: &'a str) -> Self {
         Formatter {
             src,
-            opts,
             out: String::with_capacity(src.len()),
             indent: 0,
             pending: Sep::None,
@@ -183,7 +187,7 @@ impl<'a> Formatter<'a> {
         for _ in 0..count {
             self.out.push('\n');
         }
-        for _ in 0..self.indent * self.opts.indent_width {
+        for _ in 0..self.indent * INDENT_WIDTH {
             self.out.push(' ');
         }
     }
