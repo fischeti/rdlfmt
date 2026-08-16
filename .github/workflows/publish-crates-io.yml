@@ -1,0 +1,35 @@
+# Runs on the same tag as release.yml, rather than as a dist publish-job.
+#
+# Trusted publishing identifies the caller by workflow filename, and every dist
+# hook is a reusable workflow, which that mechanism does not reliably support.
+# A top-level workflow keeps the tokenless path available; the cost is that
+# dist's release announcement no longer waits on this job.
+#
+# Auth is crates.io Trusted Publishing: the OIDC token GitHub mints here is
+# exchanged for a short-lived registry token, so there is no
+# CARGO_REGISTRY_TOKEN secret to store or rotate. This requires the crate to
+# already exist -- crates.io has no pending-publisher flow, so the first
+# version must be published by hand.
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - '**[0-9]+.[0-9]+.[0-9]+*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to mint the OIDC token that the auth action trades in.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
