@@ -3,7 +3,7 @@ name = "rdlfmt"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "An opinionated formatter for SystemRDL"
+description = "A formatter for SystemRDL"
 # TODO(publish): set to the real repo URL, and pick a license before publishing.
 repository = "https://github.com/CHANGEME/rdlfmt"
 license = "MIT OR Apache-2.0"
