@@ -442,7 +442,15 @@ fn struct_kv(f: &mut Formatter, node: &SyntaxNode) {
 
 /// The braced-body layout applied to parentheses: `(` ends the line, elements
 /// are indented one per line, `)` gets a line of its own.
+///
+/// Unlike a body, this drops any blank line the author left between elements.
+/// Parameters are parts of one construct rather than statements, so there is no
+/// grouping in here to preserve -- see [`Formatter::allow_blank_lines`].
 fn broken_list(f: &mut Formatter, node: &SyntaxNode) {
+    // Saved and restored rather than set back to `true`: what holds outside a
+    // parameter list is the caller's business, not this rule's.
+    let outer = f.allow_blank_lines(false);
+
     for child in node.children_with_tokens() {
         match child {
             NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
@@ -464,6 +472,8 @@ fn broken_list(f: &mut Formatter, node: &SyntaxNode) {
             }
         }
     }
+
+    f.allow_blank_lines(outer);
 }
 
 fn is_terminator(tok: &SyntaxToken) -> bool {

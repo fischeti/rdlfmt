@@ -303,6 +303,32 @@ fn blank_lines_inside_a_body_are_preserved() {
 }
 
 #[test]
+fn blank_lines_inside_a_broken_param_list_are_dropped() {
+    // Parameters are parts of one construct, not statements, so there is no
+    // grouping in here for a blank line to record.
+    let out = check(
+        "reg r #(\n    longint unsigned W = 8,\n\n    longint unsigned Y = 1\n) {\n    regwidth = W;\n};\n",
+    );
+    assert_eq!(
+        out,
+        "reg r #(\n    longint unsigned W = 8,\n    longint unsigned Y = 1\n) {\n    regwidth = W;\n};\n"
+    );
+}
+
+#[test]
+fn a_param_list_does_not_disable_blank_lines_for_what_follows() {
+    // The setting is restored on the way out, so the body after the list still
+    // keeps the author's grouping.
+    let out = check(
+        "reg r #(\n    longint unsigned W = 8,\n\n    longint unsigned Y = 1\n) {\n    regwidth = W;\n\n    field {} f[W];\n};\n",
+    );
+    assert_eq!(
+        out,
+        "reg r #(\n    longint unsigned W = 8,\n    longint unsigned Y = 1\n) {\n    regwidth = W;\n\n    field {} f[W];\n};\n"
+    );
+}
+
+#[test]
 fn comment_at_the_top_of_a_body_is_indented_with_it() {
     let out = check("addrmap a {\n// about x\nname = \"x\";\n};\n");
     assert_eq!(out, "addrmap a {\n    // about x\n    name = \"x\";\n};\n");

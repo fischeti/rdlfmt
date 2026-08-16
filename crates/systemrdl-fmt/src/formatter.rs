@@ -35,6 +35,9 @@
 //! how wide it should be once the rule has decided on one. That is what keeps
 //! `addrmap top` and a `{` written two lines below it on one line: the gap in
 //! front of a brace is a space however many newlines were typed into it.
+//!
+//! Where a break *is* the author's to widen is a separate question, answered by
+//! [`Formatter::allow_blank_lines`].
 
 use rowan::TextSize;
 use systemrdl_syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
@@ -81,6 +84,9 @@ pub(crate) struct Formatter<'a> {
     /// Whether a blank line would currently be spurious. See
     /// [`Formatter::suppress_blank_line`].
     no_blank_line: bool,
+    /// Whether blank lines mean anything where we currently are. See
+    /// [`Formatter::allow_blank_lines`].
+    blank_lines: bool,
 }
 
 impl<'a> Formatter<'a> {
@@ -94,6 +100,7 @@ impl<'a> Formatter<'a> {
             saw_newline: false,
             after_comment: false,
             no_blank_line: false,
+            blank_lines: true,
         }
     }
 
@@ -125,7 +132,7 @@ impl<'a> Formatter<'a> {
     /// space or nothing by the time something is written, this is discarded
     /// along with the rest of the whitespace it came from.
     pub(crate) fn blank_line(&mut self) {
-        self.blank = !self.no_blank_line;
+        self.blank = self.blank_lines && !self.no_blank_line;
     }
 
     /// Forces the separation to exactly `sep`, overriding what has been asked
@@ -151,6 +158,24 @@ impl<'a> Formatter<'a> {
     /// further.
     pub(crate) fn suppress_blank_line(&mut self) {
         self.no_blank_line = true;
+    }
+
+    /// Sets whether blank lines survive in the region being formatted, and
+    /// returns the previous setting for the caller to restore.
+    ///
+    /// The counterpart to [`Formatter::suppress_blank_line`], which speaks for
+    /// one gap; this speaks for everything nested inside a construct, which is
+    /// what it takes to cover gaps that arrive several levels down.
+    ///
+    /// A blank line is grouping, and grouping says something only between
+    /// things that stand on their own. Statements do, so a body keeps them:
+    /// which registers belong together is the author's to say and not something
+    /// the formatter could work out. The elements of a comma-separated list do
+    /// not -- they are parts of one construct, laid out one per line because it
+    /// grew too long -- so a blank line between two parameters is noise, and
+    /// dropping it is the only thing this is currently used for.
+    pub(crate) fn allow_blank_lines(&mut self, allow: bool) -> bool {
+        std::mem::replace(&mut self.blank_lines, allow)
     }
 
     //----------------------------------------------------------------------
