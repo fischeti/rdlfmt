@@ -38,13 +38,39 @@ addrmap top {
 
 ## Install
 
-> **TODO:** not yet published to crates.io — this will not work until it is.
+A prebuilt binary, needing no toolchain of any kind:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/fischeti/rdlfmt/releases/latest/download/rdlfmt-installer.sh | sh
+```
+
+On Windows:
+
+```powershell
+powershell -c "irm https://github.com/fischeti/rdlfmt/releases/latest/download/rdlfmt-installer.ps1 | iex"
+```
+
+From PyPI, which is convenient if you already manage `peakrdl` this way. The
+package is the Rust binary in a wheel, not a Python program, so it pulls in
+nothing else:
+
+```bash
+uv tool install rdlfmt
+```
+
+Or without installing at all:
+
+```bash
+uvx rdlfmt --check .
+```
+
+From crates.io, if you have a Rust toolchain:
 
 ```bash
 cargo install rdlfmt
 ```
 
-Until then, build from source (Rust 1.88+):
+Or build from source (Rust 1.88+):
 
 ```bash
 cargo build --release
