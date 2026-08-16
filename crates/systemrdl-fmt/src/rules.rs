@@ -124,8 +124,13 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
         CONSTR_INSIDE_VALUES => inside_values(f, node),
 
         // Comma-separated lists that are part of an expression, and so never
-        // break however many elements they hold.
-        CONCATENATE | REPLICATE | ARRAY_LITERAL | STRUCT_LITERAL => flat_list(f, node),
+        // break however many elements they hold. A macro call belongs here
+        // rather than with `PARAM_INST`: it is an atom in an expression, and
+        // breaking `` `MAX(a, b) `` across lines would read as a construct of
+        // its own when it stands for a single value.
+        CONCATENATE | REPLICATE | ARRAY_LITERAL | STRUCT_LITERAL | MACRO_CALL => {
+            flat_list(f, node)
+        }
 
         // The only construct in the language whose layout is in question.
         PARAM_DEF | PARAM_INST => param_list(f, node),
@@ -360,17 +365,19 @@ fn param_list_layout(node: &SyntaxNode) -> Layout {
     }
 }
 
-/// Whether a comment inside `node` makes a flat rendering impossible.
+/// Whether something inside `node` makes a flat rendering impossible.
 ///
 /// A line comment runs to the end of its line and a multi-line block comment
 /// brings its own newlines, so either one lands a break in the middle of what
-/// was meant to be a single line. Breaking deliberately is better than emitting
-/// a line the formatter did not plan.
+/// was meant to be a single line. A preprocessor directive is the same case
+/// twice over: it must both begin and end a line. Breaking deliberately is
+/// better than emitting a line the formatter did not plan.
 fn forces_break(node: &SyntaxNode) -> bool {
     node.descendants_with_tokens().any(|child| match child {
         NodeOrToken::Node(_) => false,
         NodeOrToken::Token(tok) => {
             tok.kind() == SyntaxKind::LINE_COMMENT
+                || tok.kind().is_directive()
                 || (tok.kind().is_comment() && tok.text().contains('\n'))
         }
     })

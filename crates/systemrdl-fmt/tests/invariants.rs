@@ -36,6 +36,23 @@ fn comments(src: &str) -> Vec<String> {
         .collect()
 }
 
+/// Every preprocessor directive, in order.
+///
+/// Checked separately from [`significant_tokens`] for the same reason comments
+/// are: a directive is trivia, so that filter drops it -- and a dropped
+/// `` `include `` is not a lost comment but lost *code*, arriving from another
+/// file. Kind is compared along with text, because turning a `` `endif `` into a
+/// `` `define `` would be no better. Trimmed at the end for the same reason as a
+/// comment: a directive runs to its newline and may pick up spaces the
+/// formatter drops.
+fn directives(src: &str) -> Vec<(SyntaxKind, String)> {
+    lex(src)
+        .iter()
+        .filter(|(kind, _)| kind.is_directive())
+        .map(|(kind, text)| (kind, text.trim_end().to_owned()))
+        .collect()
+}
+
 /// Asserts every invariant, and returns the formatted output for the caller to
 /// make further claims about.
 #[track_caller]
@@ -51,6 +68,11 @@ fn check(src: &str) -> String {
         comments(src),
         comments(&out),
         "formatting changed the comments\n--- input ---\n{src}\n--- output ---\n{out}"
+    );
+    assert_eq!(
+        directives(src),
+        directives(&out),
+        "formatting changed the directives\n--- input ---\n{src}\n--- output ---\n{out}"
     );
 
     let again = format(&out).expect("formatted output should parse cleanly");
@@ -684,4 +706,116 @@ fn hand_wrapped_statement_is_pulled_back_onto_one_line() {
     // the wrap is a spacing decision like any other and gets normalised away.
     let out = check("addrmap a {\n    my_reg r\n        @ 0x0;\n};\n");
     assert_eq!(out, "addrmap a {\n    my_reg r @ 0x0;\n};\n");
+}
+
+//--------------------------------------------------------------------------
+// Preprocessor directives. The brace-neutral ones are trivia, so what is
+// being checked here is placement: a directive owns its line, keeps its
+// payload byte for byte, and is indented with the code around it.
+//--------------------------------------------------------------------------
+
+#[test]
+fn a_directive_keeps_its_payload_exactly() {
+    // The spacing inside is the author's, not the formatter's: a macro body is
+    // substitution text, and normalising it would be rewriting a string.
+    let out = check("`define   W    32\n");
+    assert_eq!(out, "`define   W    32\n");
+}
+
+#[test]
+fn a_directive_is_indented_with_the_code_around_it() {
+    let out = check("addrmap top {\n`include \"regs.rdl\"\n    my_reg r;\n};\n");
+    assert_eq!(
+        out,
+        "addrmap top {\n    `include \"regs.rdl\"\n    my_reg r;\n};\n"
+    );
+}
+
+#[test]
+fn a_directive_takes_a_line_of_its_own() {
+    // Nothing may share a line with a directive on either side: what follows
+    // one would otherwise be swallowed into a macro body.
+    let out = check("my_reg a; `undef W\nmy_reg b;\n");
+    assert_eq!(out, "my_reg a;\n`undef W\nmy_reg b;\n");
+}
+
+#[test]
+fn blank_lines_around_a_directive_are_preserved() {
+    let out = check("`include \"a.rdl\"\n\naddrmap top {};\n");
+    assert_eq!(out, "`include \"a.rdl\"\n\naddrmap top {};\n");
+}
+
+#[test]
+fn trailing_whitespace_in_a_directive_is_dropped() {
+    let out = check("`define W 32   \naddrmap top {};\n");
+    assert_eq!(out, "`define W 32\naddrmap top {};\n");
+}
+
+#[test]
+fn a_continued_directive_keeps_its_own_line_breaks() {
+    // The continuation is inside the macro body, so its layout is not the
+    // formatter's to decide -- the whole directive is one token.
+    let out = check("addrmap top {\n`define B a + \\\n        b\n};\n");
+    assert_eq!(out, "addrmap top {\n    `define B a + \\\n        b\n};\n");
+}
+
+#[test]
+fn a_directive_before_a_closing_brace_stays_inside_the_body() {
+    let out = check("addrmap top {\n    my_reg r;\n`undef W\n};\n");
+    assert_eq!(out, "addrmap top {\n    my_reg r;\n    `undef W\n};\n");
+}
+
+#[test]
+fn a_directive_forces_a_parameter_list_to_break() {
+    // A single parameter would otherwise stay on the line, which a directive
+    // makes impossible: it must both begin and end one.
+    let out = check("reg r #(\n`include \"p.rdl\"\nlongint unsigned W = 32) {};\n");
+    assert_eq!(
+        out,
+        "reg r #(\n    `include \"p.rdl\"\n    longint unsigned W = 32\n) {};\n"
+    );
+}
+
+#[test]
+fn a_macro_reference_is_an_atom_in_an_expression() {
+    let out = check("reg r {\n    field {} f[`W-1:0];\n};\n");
+    assert_eq!(out, "reg r {\n    field {} f[`W - 1:0];\n};\n");
+}
+
+#[test]
+fn a_macro_call_never_breaks() {
+    let out = check("addrmap top {\n    a = `MAX(1,2);\n};\n");
+    assert_eq!(out, "addrmap top {\n    a = `MAX(1, 2);\n};\n");
+}
+
+#[test]
+fn a_macro_reference_may_stand_for_a_name() {
+    let out = check("addrmap top {\n    `MY_REG_T   r1;\n};\n");
+    assert_eq!(out, "addrmap top {\n    `MY_REG_T r1;\n};\n");
+}
+
+#[test]
+fn a_conditional_around_whole_statements_is_laid_out_like_any_directive() {
+    let out = check("addrmap top {\n`ifdef FOO\nmy_reg r1;\n`else\nmy_reg r2;\n`endif\n};\n");
+    assert_eq!(
+        out,
+        "addrmap top {\n    `ifdef FOO\n    my_reg r1;\n    `else\n    my_reg r2;\n    `endif\n};\n"
+    );
+}
+
+#[test]
+fn a_conditional_operand_is_part_of_the_directive_not_an_instantiation() {
+    // `FOO` left outside the token would be read as the start of a statement
+    // and take `my_reg` with it.
+    let out = check("`ifdef FOO\nmy_reg r;\n`endif\n");
+    assert_eq!(out, "`ifdef FOO\nmy_reg r;\n`endif\n");
+}
+
+/// The one thing a conditional is refused for, and it needs no rule of its own:
+/// a branch that opens a brace another branch closes leaves the file
+/// unbalanced, which is an ordinary parse error.
+#[test]
+fn refuses_a_conditional_that_splits_a_construct() {
+    let err = format("`ifdef A\naddrmap top {\n`else\nregfile top {\n`endif\n};\n").unwrap_err();
+    assert!(!err.errors().is_empty());
 }

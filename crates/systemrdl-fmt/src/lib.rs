@@ -34,6 +34,15 @@
 //! [`FormatError`] when the parse reports errors, because the rules assume a
 //! tree shape that error recovery does not guarantee, and rewriting a file
 //! whose structure was guessed at is how a formatter corrupts code.
+//!
+//! Preprocessor directives need no separate rule against them, which is the
+//! point of treating even the conditionals as trivia: a `` `ifdef `` whose
+//! branches hand a brace back and forth leaves the braces unbalanced, and so is
+//! refused by the same check as any other input the parser could not follow.
+//! Everything else formats like a comment -- its own line, indented with the
+//! code around it, payload untouched. See the module docs in
+//! [`systemrdl_syntax::parser`] for why ignoring a conditional cannot corrupt
+//! the file.
 
 mod formatter;
 mod rules;

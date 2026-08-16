@@ -64,6 +64,24 @@ const VALID: &[&str] = &[
     "x = !a && (b || c);",
     "x = &a | ~^b;",
     "x = a[3][2];",
+    // Directives are trivia, so they parse anywhere at all.
+    "`include \"other.rdl\"",
+    "`ifdef A\naddrmap top {};\n`endif",
+    "addrmap top {\n`ifndef SKIP\n    my_reg r;\n`endif\n};",
+    "`ifdef A\nmy_reg a;\n`elsif B\nmy_reg b;\n`else\nmy_reg c;\n`endif",
+    "`define W 32\naddrmap top {};",
+    "addrmap top {\n`include \"regs.rdl\"\n};",
+    "reg r #(\n`define W 32\nlongint unsigned W = 32) {};",
+    // A macro reference may stand for a value...
+    "x = `W;",
+    "x = `W - 1;",
+    "field {} f[`W-1:0];",
+    "x = `MAX(1, 2);",
+    "x = `NOW() + 1;",
+    // ...or for a name.
+    "`MY_REG_T inst;",
+    "my_reg `INST_NAME;",
+    "x = `MY_ENUM::IDLE;",
 ];
 
 /// Input that must produce errors but must still yield a round-tripping tree.
@@ -155,6 +173,41 @@ fn broken_input_still_round_trips() {
             "expected errors for {src:?} but got none"
         );
     }
+}
+
+/// A conditional whose branches are whole statements parses like any other
+/// file, because the directives are invisible to the parser.
+///
+/// Note both branches end up in the tree at once. That is not an approximation
+/// of what the preprocessor would do -- it is the only honest reading, since
+/// which branch survives depends on definitions this crate never sees, and a
+/// formatter has to preserve the ones that do not.
+#[test]
+fn conditionals_around_whole_statements_parse() {
+    let src = "addrmap top {\n`ifdef FOO\n    my_reg r1;\n`else\n    my_reg r2;\n`endif\n};";
+    let parsed = parse(src);
+
+    assert_eq!(parsed.syntax().to_string(), src, "round-trip failed");
+    assert!(
+        parsed.errors().is_empty(),
+        "unexpected errors: {:?}",
+        parsed.errors()
+    );
+}
+
+/// A conditional whose branches split a construct does *not* parse, and needs
+/// no special case to be caught: with the directives invisible the source reads
+/// as `addrmap top { regfile top {`, whose braces never balance.
+#[test]
+fn a_conditional_that_splits_a_construct_is_an_error() {
+    let src = "`ifdef A\naddrmap top {\n`else\nregfile top {\n`endif\n    my_reg r;\n};";
+    let parsed = parse(src);
+
+    assert_eq!(parsed.syntax().to_string(), src, "round-trip failed");
+    assert!(
+        !parsed.errors().is_empty(),
+        "expected errors for a straddling conditional but got none"
+    );
 }
 
 /// A formatter must never be handed a tree it cannot reproduce, so this is the

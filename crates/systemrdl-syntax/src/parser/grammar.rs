@@ -889,6 +889,12 @@ fn expr_primary(p: &mut Parser) {
             return;
         }
         L_PAREN => paren_expr(p),
+        // `` `MAX(a, b) ``. Checked ahead of the name arm below, which would
+        // otherwise take the reference on its own and strand the arguments.
+        MACRO_REF if p.nth(1) == L_PAREN => {
+            macro_call(p);
+            return;
+        }
         k if NUMBER_TOKEN.contains(&k) || k == STRING_LITERAL || LITERAL_KW.contains(&k) => {
             p.start_node(LITERAL);
             p.bump();
@@ -944,6 +950,27 @@ fn paren_expr(p: &mut Parser) {
     p.start_node(PAREN_EXPR);
     p.expect(L_PAREN);
     expr(p);
+    p.expect(R_PAREN);
+    p.finish_node();
+}
+
+/// `` `MAX(a, b) `` -- a reference to a function-like macro.
+///
+/// The arguments are parsed as expressions, which is what they are in every
+/// use a formatter could lay out anyway. Arguments that are arbitrary token
+/// soup -- legal, since the preprocessor substitutes text -- fail to parse and
+/// so are refused rather than reshaped, which is the right answer for input
+/// nobody can make sense of without the definitions.
+fn macro_call(p: &mut Parser) {
+    p.start_node(MACRO_CALL);
+    p.bump(); // `MACRO
+    p.expect(L_PAREN);
+    if !p.at(R_PAREN) {
+        expr(p);
+        while p.eat(COMMA) {
+            expr(p);
+        }
+    }
     p.expect(R_PAREN);
     p.finish_node();
 }

@@ -17,6 +17,41 @@
 //! when a real token is emitted, so opening a node first captures it), and
 //! [`Parser::eat_trailing_comment`] is called just before closing a statement.
 //!
+//! # Preprocessor directives
+//!
+//! An unpreprocessed file is the only kind a formatter is ever handed, so
+//! Clause 16 directives have to survive the parse. Every one of them is trivia,
+//! conditionals included, and each is a single token covering its whole line --
+//! so the parser is not merely tolerant of `` `ifdef `` but blind to it.
+//!
+//! For `` `define `` and friends that is obviously fine. For a conditional it
+//! looks reckless, since the branches of one may hand a brace back and forth:
+//!
+//! ```text
+//! `ifdef A
+//! addrmap top {
+//! `else
+//! regfile top {
+//! `endif
+//! ```
+//!
+//! What makes it safe is that a formatter has no obligation to *understand* a
+//! conditional, only to avoid breaking it -- and preprocessing depends on
+//! nothing but the sequence of tokens and the rule that a directive owns its
+//! line. `systemrdl_fmt::format` verifies the first (its output lexes to the
+//! same token stream as its input) and the formatter guarantees the second, so
+//! whatever it does with the whitespace in between, the preprocessed result is
+//! unchanged for every set of macro definitions at once.
+//!
+//! The pathological case above is still not formatted -- with the directives
+//! invisible it reads as `addrmap top { regfile top {`, whose braces do not
+//! balance, and the ordinary error path refuses it. That is the whole
+//! mechanism: no region analysis, no branch enumeration, and no way for a
+//! conditional to produce plausible-looking but wrong output.
+//!
+//! A macro *reference* is not trivia: it is an atom that may stand for a value
+//! or for a name, which is why [`SyntaxKind::is_ident_like`] admits it.
+//!
 //! # Divergences from `SystemRDL.g4`
 //!
 //! The tree shape is tuned for formatting rather than mirroring the reference

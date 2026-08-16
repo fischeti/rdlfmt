@@ -5,15 +5,18 @@
 //! interior nodes carrying children. Everything from `WHITESPACE` down to
 //! `LEX_ERROR` is a token; everything from `SOURCE_FILE` on is a node.
 //!
-//! The token half mirrors the lexer rules in `SystemRDL.g4`; the node half is
-//! *not* a 1:1 mirror of the parser rules. Rules that are pure alternation with
-//! no formatting decision attached (`literal`, `number`, `string_literal`,
-//! `udp_attr`, `struct_type`) are flattened away -- they would only add tree
-//! depth for the formatter to walk through. Conversely a few nodes exist here
-//! that the grammar inlines (`ENUM_BODY`, `STRUCT_BODY`, `UDP_BODY`), because a
-//! braced block is exactly where an indentation decision lives.
+//! The token half mirrors the lexer rules in `SystemRDL.g4`, plus the Clause 16
+//! preprocessor forms that grammar does not cover -- it describes the language
+//! *after* preprocessing, which is not the language a formatter is handed.
+//!
+//! The node half is *not* a 1:1 mirror of the parser rules. Rules that are pure
+//! alternation with no formatting decision attached (`literal`, `number`,
+//! `string_literal`, `udp_attr`, `struct_type`) are flattened away -- they would
+//! only add tree depth for the formatter to walk through. Conversely a few nodes
+//! exist here that the grammar inlines (`ENUM_BODY`, `STRUCT_BODY`, `UDP_BODY`),
+//! because a braced block is exactly where an indentation decision lives.
 
-use logos::Logos;
+use logos::{Lexer, Logos};
 
 /// Kinds of tokens and nodes in a SystemRDL syntax tree.
 ///
@@ -54,6 +57,33 @@ pub enum SyntaxKind {
     #[regex(r"/\*([^*]|\*+[^*/])*\*+/")]
     BLOCK_COMMENT,
 
+    /// A text-substitution or file-inclusion directive: `` `define ``,
+    /// `` `include ``, `` `line ``, `` `undef `` (Clause 16, Table 32).
+    ///
+    /// Matched as *one* token running to the end of the logical line,
+    /// backslash-continuations included, because the payload is not SystemRDL.
+    /// A macro body is arbitrary substitution text; lexing into it would let
+    /// the formatter reshape something that is not code, and `` `define A 1+2 ``
+    /// is not an expression the way `1 + 2` is.
+    #[regex(r"`(define|include|line|undef)", directive_line, priority = 20)]
+    DIRECTIVE,
+
+    /// A conditional-compilation directive: `` `if ``, `` `ifdef ``,
+    /// `` `ifndef ``, `` `elsif ``, `` `else ``, `` `endif ``.
+    ///
+    /// A separate kind from [`SyntaxKind::DIRECTIVE`] because it is the one
+    /// that can move a brace between branches -- nothing downstream acts on the
+    /// distinction today, but a `` `endif `` should not be filed under the same
+    /// name as a `` `define ``, and this is where a future region analysis would
+    /// start.
+    ///
+    /// Runs to the end of the line for the same reason the others do, though
+    /// the reason is sharper here: the `FOO` of `` `ifdef FOO `` is a macro
+    /// name, and left outside the token the parser would read it as the start
+    /// of an instantiation and report an error on the statement below.
+    #[regex(r"`(ifdef|ifndef|elsif|endif|else|if)", directive_line, priority = 20)]
+    COND_DIRECTIVE,
+
     //--------------------------------------------------------------------
     // Literals and identifiers
     //--------------------------------------------------------------------
@@ -71,6 +101,15 @@ pub enum SyntaxKind {
     STRING_LITERAL,
     #[regex(r"\\?[a-zA-Z_][a-zA-Z0-9_]*")]
     IDENT,
+    /// A text macro reference: `` `WIDTH ``, `` `MAX ``.
+    ///
+    /// What it expands to is unknowable without the definitions, so it is
+    /// treated as an atom that may stand either for a value or for a name --
+    /// see [`SyntaxKind::is_ident_like`]. Longest-match keeps it from
+    /// swallowing the directives above, and keeps `` `defineFOO `` a macro
+    /// reference rather than a malformed `` `define ``.
+    #[regex(r"`[a-zA-Z_][a-zA-Z0-9_]*")]
+    MACRO_REF,
 
     //--------------------------------------------------------------------
     // Keywords
@@ -418,6 +457,8 @@ pub enum SyntaxKind {
     CAST_TYPE,
     CAST_WIDTH,
 
+    MACRO_CALL,
+
     LITERAL,
     ARRAY_LITERAL,
     STRUCT_LITERAL,
@@ -443,17 +484,28 @@ pub enum SyntaxKind {
 }
 
 impl SyntaxKind {
-    /// Whitespace and comments -- the tokens the parser passes through
-    /// verbatim and never makes a decision on.
+    /// Whitespace, comments and preprocessor directives -- the tokens the
+    /// parser passes through verbatim and never makes a decision on.
+    ///
+    /// The conditionals are in here too, which is worth a word. It is not that
+    /// they are harmless -- a `` `ifdef `` really can open a brace its `` `else ``
+    /// closes -- but that a formatter never has to know. See the module docs in
+    /// [`crate::parser`] for why ignoring them is safe rather than merely cheap.
     pub fn is_trivia(self) -> bool {
         matches!(
             self,
             SyntaxKind::WHITESPACE | SyntaxKind::LINE_COMMENT | SyntaxKind::BLOCK_COMMENT
-        )
+        ) || self.is_directive()
     }
 
     pub fn is_comment(self) -> bool {
         matches!(self, SyntaxKind::LINE_COMMENT | SyntaxKind::BLOCK_COMMENT)
+    }
+
+    /// A preprocessor directive of either kind -- the tokens that own a whole
+    /// line of the file.
+    pub fn is_directive(self) -> bool {
+        matches!(self, SyntaxKind::DIRECTIVE | SyntaxKind::COND_DIRECTIVE)
     }
 
     pub fn is_keyword(self) -> bool {
@@ -465,8 +517,14 @@ impl SyntaxKind {
     /// Several grammar rules accept a keyword where an identifier is expected
     /// (`basic_data_type`, `normal_prop_assign`, ...), which is unavoidable
     /// given how many short words SystemRDL reserves.
+    ///
+    /// A macro reference qualifies too, and for a stronger reason: it may
+    /// expand to anything, so `` `MY_REG_T inst; `` is as plausible as
+    /// `` field f[`WIDTH-1:0]; ``. Admitting it here is what lets one rule --
+    /// [`expect_name`](crate::parser) -- cover every position a macro can name
+    /// something in, instead of each of them growing a case for it.
     pub fn is_ident_like(self) -> bool {
-        self == SyntaxKind::IDENT || self.is_keyword()
+        matches!(self, SyntaxKind::IDENT | SyntaxKind::MACRO_REF) || self.is_keyword()
     }
 
     /// Recovers a kind from its raw discriminant.
@@ -485,4 +543,39 @@ impl SyntaxKind {
     pub fn to_raw(self) -> u16 {
         self as u16
     }
+}
+
+/// Extends a [`SyntaxKind::DIRECTIVE`] match to the end of its logical line.
+///
+/// A directive ends at a newline, except that a backslash immediately before
+/// one continues it -- which is how a `` `define `` spells a multi-line macro
+/// body. A backslash anywhere else is ordinary text (SystemRDL uses it to
+/// escape identifiers), so it is stepped over rather than treated as an escape.
+fn directive_line(lex: &mut Lexer<SyntaxKind>) {
+    let rest = lex.remainder().as_bytes();
+    let mut i = 0;
+
+    while i < rest.len() {
+        match rest[i] {
+            b'\n' | b'\r' => break,
+            b'\\' => {
+                let mut j = i + 1;
+                if rest.get(j) == Some(&b'\r') {
+                    j += 1;
+                }
+                if rest.get(j) == Some(&b'\n') {
+                    i = j + 1;
+                } else {
+                    i += 1;
+                }
+            }
+            // Bumping through a multi-byte character one byte at a time is
+            // safe: every byte of one is >= 0x80 and so matches this arm, and
+            // the loop only *stops* on ASCII or at the end -- so `i` is always
+            // a char boundary by the time it is handed to `bump`.
+            _ => i += 1,
+        }
+    }
+
+    lex.bump(i);
 }

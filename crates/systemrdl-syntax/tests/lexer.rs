@@ -33,8 +33,20 @@ const SNIPPETS: &[&str] = &[
     "~& ~| ~^ ^~ && || << >> <= >= != -> :: @ ?",
     "x[7:0]",
     "field {} STATUS[7:0] = 8'hA5;",
+    "`include \"other.rdl\"",
+    "`define W 32",
+    "`define W 32\n",
+    "`define BODY a + \\\n    b\nreg r {};",
+    "`undef W",
+    "`line 5 \"f.rdl\" 0",
+    "`ifdef A\n`else\n`endif",
+    "f[`W-1:0]",
+    "`MAX(1, 2)",
     // Broken on purpose.
     "$ ` §",
+    "`",
+    "`define",
+    "`define trailing backslash \\",
     "\"unterminated",
     "/* unterminated",
     "reg $$ field",
@@ -77,6 +89,12 @@ fn kinds(src: &str) -> Vec<(SyntaxKind, &str)> {
         .iter()
         .filter(|(kind, _)| !kind.is_trivia())
         .collect()
+}
+
+/// Helper: every token, trivia included. Needed where the token under test
+/// *is* trivia, which [`kinds`] filters out.
+fn all(src: &str) -> Vec<(SyntaxKind, &str)> {
+    lex(src).iter().collect()
 }
 
 #[test]
@@ -193,6 +211,88 @@ fn block_comment_edge_cases() {
         let toks: Vec<_> = lex(src).iter().collect();
         assert_eq!(toks, [(BLOCK_COMMENT, src)], "failed on {src:?}");
     }
+}
+
+/// Every directive is one token covering its whole logical line -- the payload
+/// is substitution text, not SystemRDL, and must not be lexed as if it were.
+#[test]
+fn directives_are_one_opaque_token_per_line() {
+    use SyntaxKind::*;
+    for src in [
+        "`define W 32",
+        "`include \"other.rdl\"",
+        "`undef W",
+        "`line 5 \"f.rdl\" 0",
+        // The payload is never lexed, so nothing in it can be mistaken for code.
+        "`define X reg r {};",
+    ] {
+        assert_eq!(all(src), [(DIRECTIVE, src)], "failed on {src:?}");
+    }
+    // A conditional takes its operand with it. Left outside the token, the
+    // `FOO` here would read as the start of an instantiation.
+    for src in ["`ifdef FOO", "`ifndef FOO", "`elsif FOO", "`else", "`endif"] {
+        assert_eq!(all(src), [(COND_DIRECTIVE, src)], "failed on {src:?}");
+    }
+
+    // The line ends at the newline, which stays behind as whitespace.
+    assert_eq!(
+        all("`define W 32\nreg"),
+        [
+            (DIRECTIVE, "`define W 32"),
+            (WHITESPACE, "\n"),
+            (REG_KW, "reg")
+        ]
+    );
+    // A backslash before the newline continues the directive; one anywhere
+    // else is ordinary text, and does not.
+    assert_eq!(
+        all("`define B a + \\\n  b\nreg"),
+        [
+            (DIRECTIVE, "`define B a + \\\n  b"),
+            (WHITESPACE, "\n"),
+            (REG_KW, "reg")
+        ]
+    );
+    assert_eq!(
+        all("`define E \\esc\nreg"),
+        [
+            (DIRECTIVE, "`define E \\esc"),
+            (WHITESPACE, "\n"),
+            (REG_KW, "reg")
+        ]
+    );
+}
+
+#[test]
+fn backtick_forms_are_told_apart_by_longest_match() {
+    use SyntaxKind::*;
+    // A directive name is only a directive when the identifier ends there.
+    assert_eq!(all("`define"), [(DIRECTIVE, "`define")]);
+    assert_eq!(all("`defineFOO"), [(MACRO_REF, "`defineFOO")]);
+    assert_eq!(all("`else"), [(COND_DIRECTIVE, "`else")]);
+    assert_eq!(all("`elsewhere"), [(MACRO_REF, "`elsewhere")]);
+    // `ifdef` beats the `if` it starts with, on length.
+    assert_eq!(all("`ifdef"), [(COND_DIRECTIVE, "`ifdef")]);
+    // A bare backtick names nothing and stays an error.
+    assert_eq!(all("`"), [(LEX_ERROR, "`")]);
+}
+
+#[test]
+fn macro_references_are_atoms() {
+    use SyntaxKind::*;
+    assert_eq!(
+        kinds("f[`W-1:0]"),
+        [
+            (IDENT, "f"),
+            (L_BRACK, "["),
+            (MACRO_REF, "`W"),
+            (MINUS, "-"),
+            (INT_NUMBER, "1"),
+            (COLON, ":"),
+            (INT_NUMBER, "0"),
+            (R_BRACK, "]")
+        ]
+    );
 }
 
 #[test]

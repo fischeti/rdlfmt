@@ -3,6 +3,14 @@
 // this file must change nothing, which is what `the_output_style_is_a_fixed_point`
 // asserts.
 
+// The preprocessor directives (spec Table 32). Each owns its line and its
+// payload is kept byte for byte -- a macro body is substitution text, not code,
+// so the spacing inside one is the author's.
+`include "other.rdl"
+`define MY_WIDTH   32
+`define MY_RANGE(hi, lo) hi:lo
+`undef OLD_WIDTH
+
 property my_udp {
     component = field | reg;
     type = string;
@@ -99,3 +107,30 @@ addrmap exprs {
     l = { 2{ m } };
     n = my_enum::IDLE;
 };
+
+// A macro reference is an atom: it may stand for a value, or for a name, since
+// what it expands to is unknowable without the definitions. A directive inside
+// a body is indented with the code around it.
+addrmap macros {
+    `include "regs.rdl"
+
+    reg {
+        field {} data[`MY_WIDTH - 1:0];
+        field {} limit[`MAX(3, 4):0];
+    } r1;
+
+    `MY_REG_T r2;
+};
+
+// A conditional is laid out like any other directive: on its own line, at the
+// indentation of the code around it, and with both branches kept, since which
+// one survives depends on definitions that live in another file.
+`ifndef MY_MAP_DEFINED
+addrmap conditional {
+    `ifdef WITH_STATUS
+    my_reg status @ 0x0;
+    `else
+    my_reg reserved @ 0x0;
+    `endif
+};
+`endif

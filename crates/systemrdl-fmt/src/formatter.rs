@@ -284,7 +284,8 @@ impl<'a> Formatter<'a> {
         self.after_comment = false;
     }
 
-    /// Handles one trivia token: drops whitespace, keeps comments.
+    /// Handles one trivia token: drops whitespace, keeps comments and
+    /// preprocessor directives.
     pub(crate) fn trivia(&mut self, tok: &SyntaxToken) {
         match tok.kind() {
             SyntaxKind::WHITESPACE => {
@@ -303,6 +304,25 @@ impl<'a> Formatter<'a> {
                     self.request(Sep::Newline);
                 }
                 self.saw_newline |= newlines >= 1;
+            }
+            kind if kind.is_directive() => {
+                // Requested rather than pinned, unlike a line comment: the
+                // point here is to *raise* the separation to a break, never to
+                // overrule a stronger one, and leaving the width open is what
+                // lets a blank line the author left in front of an `include`
+                // block survive.
+                self.request(Sep::Newline);
+                // A directive runs to the end of its line, so any spaces at
+                // the end of it are outside the macro body in every sense that
+                // matters -- and keeping them would leave the one thing this
+                // formatter promises never to emit.
+                self.write_raw(tok.text().trim_end());
+                // Unconditional, for the same reason as a line comment's:
+                // whatever follows a directive *must* start a new line, and
+                // getting this wrong swallows code into a macro body.
+                self.request(Sep::Newline);
+                self.saw_newline = false;
+                self.after_comment = false;
             }
             kind if kind.is_comment() => {
                 // A comment that followed a newline in the source introduces
