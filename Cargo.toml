@@ -2,7 +2,7 @@
 name = "rdlfmt"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "A formatter for SystemRDL"
 repository = "https://github.com/fischeti/rdlfmt"
 license = "MIT OR Apache-2.0"

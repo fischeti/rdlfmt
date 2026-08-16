@@ -30,7 +30,7 @@
 //!
 //! # What the formatter will not do
 //!
-//! Reformat a file the parser did not fully understand. [`format`] returns
+//! Reformat a file the parser did not fully understand. [`format()`] returns
 //! [`FormatError`] when the parse reports errors, because the rules assume a
 //! tree shape that error recovery does not guarantee, and rewriting a file
 //! whose structure was guessed at is how a formatter corrupts code.
@@ -105,7 +105,7 @@ impl std::error::Error for FormatError {}
 /// ending arguments, not by relocating them into a config file. Indentation is
 /// four spaces, which is what the PeakRDL style guide asks for.
 ///
-/// The output is verified before it is returned: see [`verify`]. A caller that
+/// The output is verified before it is returned: see `verify`. A caller that
 /// gets `Ok` has a guarantee, not just a hope, that only whitespace moved.
 ///
 /// # Errors

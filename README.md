@@ -44,7 +44,7 @@ addrmap top {
 cargo install rdlfmt
 ```
 
-Until then, build from source (Rust 1.85+):
+Until then, build from source (Rust 1.88+):
 
 ```bash
 cargo build --release

@@ -15,7 +15,7 @@
 //!
 //! Mechanically this falls out of two things: trivia is flushed lazily (only
 //! when a real token is emitted, so opening a node first captures it), and
-//! [`Parser::eat_trailing_comment`] is called just before closing a statement.
+//! `Parser::eat_trailing_comment` is called just before closing a statement.
 //!
 //! # Preprocessor directives
 //!
