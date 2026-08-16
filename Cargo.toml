@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "A formatter for SystemRDL"
-# TODO(publish): set to the real repo URL, and pick a license before publishing.
-repository = "https://github.com/CHANGEME/rdlfmt"
+repository = "https://github.com/fischeti/rdlfmt"
 license = "MIT OR Apache-2.0"
+readme = "README.md"
 keywords = ["systemrdl", "formatter", "eda", "registers", "csr"]
 categories = ["development-tools", "command-line-utilities"]
 # The spec PDF is Accellera's, not ours to redistribute in the crate tarball.
