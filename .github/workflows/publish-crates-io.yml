@@ -28,8 +28,45 @@ jobs:
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
+
+      # Publishing the same version twice is a hard error, so a release that
+      # got part-way through cannot simply be re-run. Checking first makes this
+      # job idempotent: it publishes when there is something to publish and
+      # succeeds quietly when there is not.
+      #
+      # The sparse index is the source of truth here rather than the web API,
+      # which rate-limits and answers a throttled request with an error body
+      # that is easy to misread as "no such crate".
+      - name: Check whether this version is already published
+        id: check
+        run: |
+          set -euo pipefail
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          name=$(jq -r '.packages[0].name' <<<"$metadata")
+          version=$(jq -r '.packages[0].version' <<<"$metadata")
+          # Index layout: short names get their own buckets, everything from
+          # four characters up is bucketed by its first four.
+          case ${#name} in
+            1) index_path="1/$name" ;;
+            2) index_path="2/$name" ;;
+            3) index_path="3/${name:0:1}/$name" ;;
+            *) index_path="${name:0:2}/${name:2:2}/$name" ;;
+          esac
+          # A 404 means the crate has never been published, so curl failing
+          # here has to fall through to publishing rather than abort the job.
+          if curl -sf "https://index.crates.io/$index_path" \
+               | jq -e --arg v "$version" 'select(.vers == $v)' >/dev/null; then
+            echo "$name $version is already on crates.io; nothing to publish"
+            echo "needed=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "$name $version is not on crates.io yet"
+            echo "needed=true" >>"$GITHUB_OUTPUT"
+          fi
+
       - uses: rust-lang/crates-io-auth-action@v1
+        if: steps.check.outputs.needed == 'true'
         id: auth
       - run: cargo publish --locked
+        if: steps.check.outputs.needed == 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
