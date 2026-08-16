@@ -136,8 +136,9 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
 
 /// Top-level items, one per line, with blank lines between them preserved.
 ///
-/// The `Sep::Newline` request before each item is a *minimum*: a blank line in
-/// the source arrives later, as the item's own leading trivia, and wins.
+/// The `Sep::Newline` request before each item is what makes the author's blank
+/// lines count for anything: one arrives later, as the item's own leading
+/// trivia, and widens the break this asked for.
 fn source_file(f: &mut Formatter, node: &SyntaxNode) {
     for child in node.children_with_tokens() {
         match child {
@@ -173,8 +174,8 @@ fn braced_body(f: &mut Formatter, node: &SyntaxNode) {
 
     if is_empty(node) {
         // Whitespace between the braces is dropped rather than routed through
-        // `trivia`: it has nothing to separate, and a blank line among it would
-        // otherwise request a break the body has just decided against.
+        // `trivia`: with nothing between `{` and `}` to separate, there is
+        // nothing for it to say.
         for child in node.children_with_tokens() {
             if let NodeOrToken::Token(tok) = child
                 && !tok.kind().is_trivia()

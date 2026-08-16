@@ -271,6 +271,29 @@ fn blank_line_before_closing_brace_is_dropped() {
 }
 
 #[test]
+fn blank_line_before_an_opening_brace_is_dropped() {
+    // Regression: whitespace used to request a blank line outright, which beat
+    // the space the body asks for in front of `{` and left the brace stranded
+    // on a line of its own.
+    let out = check("addrmap a\n\n{\n    name = \"x\";\n};\n");
+    assert_eq!(out, "addrmap a {\n    name = \"x\";\n};\n");
+}
+
+#[test]
+fn a_blank_line_does_not_break_what_never_breaks() {
+    // The same regression everywhere else an author can leave one. A blank line
+    // widens a break the rules decided on; it cannot introduce one.
+    let out = check("addrmap a {\n    name =\n\n(\"x\");\n};\n");
+    assert_eq!(out, "addrmap a {\n    name = (\"x\");\n};\n");
+
+    let out = check("reg r #\n\n(longint unsigned W = 8)\n\n{\n    regwidth = W;\n};\n");
+    assert_eq!(
+        out,
+        "reg r #(longint unsigned W = 8) {\n    regwidth = W;\n};\n"
+    );
+}
+
+#[test]
 fn blank_lines_inside_a_body_are_preserved() {
     let out = check("addrmap a {\n    name = \"x\";\n\n    desc = \"y\";\n};\n");
     assert_eq!(
