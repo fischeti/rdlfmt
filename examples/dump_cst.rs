@@ -4,13 +4,13 @@
 //! rather than on a hidden channel -- which is what the formatter needs and
 //! what makes this worth looking at when a rule misplaces something.
 //!
-//!     cargo run -p systemrdl-syntax --example dump-cst -- samples/sample.rdl
-//!     cargo run -p systemrdl-syntax --example dump-cst -- samples/sample.rdl --no-trivia
+//!     cargo run --example dump-cst -- samples/sample.rdl
+//!     cargo run --example dump-cst -- samples/sample.rdl --no-trivia
 //!
 //! An example rather than a binary so that the workspace holds exactly one, and
 //! a bare `cargo run` unambiguously means the formatter.
 
-use systemrdl_syntax::{SyntaxElement, SyntaxNode, parse};
+use rdlfmt::syntax::{SyntaxElement, SyntaxNode, parse};
 
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

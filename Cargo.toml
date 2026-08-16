@@ -1,14 +1,35 @@
-[workspace]
-resolver = "3"
-members = ["crates/systemrdl-syntax", "crates/systemrdl-fmt"]
-
-[workspace.package]
+[package]
+name = "rdlfmt"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "An opinionated formatter for SystemRDL"
+# TODO(publish): set to the real repo URL, and pick a license before publishing.
+repository = "https://github.com/CHANGEME/rdlfmt"
+license = "MIT OR Apache-2.0"
+keywords = ["systemrdl", "formatter", "eda", "registers", "csr"]
+categories = ["development-tools", "command-line-utilities"]
+# The spec PDF is Accellera's, not ours to redistribute in the crate tarball.
+exclude = ["docs/", "sample.cst"]
 
-[workspace.dependencies]
-anstyle = "1.0"
-clap = { version = "4.5", features = ["derive"] }
+[features]
+default = ["cli"]
+# The `rdlfmt` binary. The library half depends on none of these, so a
+# consumer of `rdlfmt::format` can turn the whole CLI off.
+cli = ["dep:anstyle", "dep:clap", "dep:similar"]
+
+[[bin]]
+name = "rdlfmt"
+required-features = ["cli"]
+
+[[example]]
+name = "dump-cst"
+path = "examples/dump_cst.rs"
+
+[dependencies]
 logos = "0.16.1"
 rowan = "0.17.0"
-similar = "3.1"
+
+anstyle = { version = "1.0", optional = true }
+clap = { version = "4.5", features = ["derive"], optional = true }
+similar = { version = "3.1", optional = true }

@@ -18,9 +18,9 @@
 pub mod kind;
 pub mod lexer;
 pub mod parser;
-pub mod syntax;
+pub mod tree;
 
 pub use kind::SyntaxKind;
 pub use lexer::{Lexed, LexedToken, lex};
 pub use parser::{ParseError, Parsed, parse};
-pub use syntax::{SyntaxElement, SyntaxNode, SyntaxToken, SystemRdl};
+pub use tree::{SyntaxElement, SyntaxNode, SyntaxToken, SystemRdl};

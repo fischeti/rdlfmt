@@ -5,7 +5,7 @@
 //! opaque `u16` rowan stores internally, which is why the aliases below are the
 //! only things the rest of the crate ever names.
 
-use crate::kind::SyntaxKind;
+use crate::syntax::kind::SyntaxKind;
 
 /// Marker type identifying SystemRDL to rowan. Never instantiated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

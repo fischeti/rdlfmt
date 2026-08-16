@@ -490,7 +490,7 @@ impl SyntaxKind {
     /// The conditionals are in here too, which is worth a word. It is not that
     /// they are harmless -- a `` `ifdef `` really can open a brace its `` `else ``
     /// closes -- but that a formatter never has to know. See the module docs in
-    /// [`crate::parser`] for why ignoring them is safe rather than merely cheap.
+    /// [`crate::syntax::parser`] for why ignoring them is safe rather than merely cheap.
     pub fn is_trivia(self) -> bool {
         matches!(
             self,
@@ -521,7 +521,7 @@ impl SyntaxKind {
     /// A macro reference qualifies too, and for a stronger reason: it may
     /// expand to anything, so `` `MY_REG_T inst; `` is as plausible as
     /// `` field f[`WIDTH-1:0]; ``. Admitting it here is what lets one rule --
-    /// [`expect_name`](crate::parser) -- cover every position a macro can name
+    /// [`expect_name`](crate::syntax::parser) -- cover every position a macro can name
     /// something in, instead of each of them growing a case for it.
     pub fn is_ident_like(self) -> bool {
         matches!(self, SyntaxKind::IDENT | SyntaxKind::MACRO_REF) || self.is_keyword()

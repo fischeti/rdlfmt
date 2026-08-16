@@ -1,14 +1,14 @@
-//! The `systemrdl-fmt` command.
+//! The `rdlfmt` command.
 //!
 //! # Writing is the default
 //!
-//! `systemrdl-fmt foo.rdl` rewrites `foo.rdl`. There is no `--write` flag,
+//! `rdlfmt foo.rdl` rewrites `foo.rdl`. There is no `--write` flag,
 //! because the overwhelmingly common thing to want is formatted files, and a
 //! flag that is passed every single time is not carrying information -- the
 //! same call rustfmt, black and ruff make. `--check`, `--diff` and `--stdout`
 //! are there for the times you want something else.
 //!
-//! What makes that defensible is not this file: [`systemrdl_fmt::format`]
+//! What makes that defensible is not this file: [`rdlfmt::format`]
 //! verifies its own output before returning it, so a file is only ever replaced
 //! by one that lexes to the same code.
 
@@ -34,7 +34,7 @@ const STYLES: Styles = Styles::styled()
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "systemrdl-fmt",
+    name = "rdlfmt",
     version,
     about = "Format SystemRDL source",
     long_about = "Format SystemRDL source.\n\n\
@@ -222,7 +222,7 @@ impl Run {
 
     /// Formats `src`, reporting any error against `path`.
     fn format(&mut self, src: &str, path: &Path) -> Option<String> {
-        match systemrdl_fmt::format(src) {
+        match rdlfmt::format(src) {
             Ok(out) => Some(out),
             Err(err) => {
                 for error in err.errors() {
@@ -274,7 +274,7 @@ fn plural(n: usize) -> &'static str {
 
 /// Every `.rdl` file under `dir`, sorted so that output is reproducible.
 ///
-/// Entries whose name starts with `.` are skipped, which keeps `systemrdl-fmt .`
+/// Entries whose name starts with `.` are skipped, which keeps `rdlfmt .`
 /// out of `.git` without needing to know what a VCS is.
 fn rdl_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();

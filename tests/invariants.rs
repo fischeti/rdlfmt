@@ -10,8 +10,8 @@
 //! Snapshot tests say what the output looks like; these say what it may never
 //! do. Both are needed, but only these survive a style change unedited.
 
-use systemrdl_fmt::format;
-use systemrdl_syntax::{SyntaxKind, lex};
+use rdlfmt::format;
+use rdlfmt::syntax::{SyntaxKind, lex};
 
 /// Every token that carries meaning, as `(kind, text)`.
 ///
@@ -86,7 +86,7 @@ fn check(src: &str) -> String {
 
 #[test]
 fn sample_file() {
-    check(include_str!("../../../samples/sample.rdl"));
+    check(include_str!("../samples/sample.rdl"));
 }
 
 /// The corpus file is written in the formatter's own output style and exercises
@@ -98,7 +98,7 @@ fn sample_file() {
 /// after reading what moved.
 #[test]
 fn the_output_style_is_a_fixed_point() {
-    let canonical = include_str!("../../../samples/kitchen-sink.rdl");
+    let canonical = include_str!("../samples/kitchen-sink.rdl");
     assert_eq!(check(canonical), canonical);
 }
 

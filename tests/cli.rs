@@ -1,4 +1,4 @@
-//! End-to-end tests for the `systemrdl-fmt` command.
+//! End-to-end tests for the `rdlfmt` command.
 //!
 //! What these are for is the behaviour that is not the formatter: which files
 //! get touched, what the exit status is, and where the output goes. The
@@ -11,7 +11,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-const EXE: &str = env!("CARGO_BIN_EXE_systemrdl-fmt");
+const EXE: &str = env!("CARGO_BIN_EXE_rdlfmt");
 
 const UNFORMATTED: &str = "addrmap a{name=\"x\";};\n";
 const FORMATTED: &str = "addrmap a {\n    name = \"x\";\n};\n";
@@ -23,7 +23,7 @@ impl TempDir {
     fn new(tag: &str) -> TempDir {
         // Enough to be unique across a parallel run without a dependency:
         // the tag is per-test and the pid is per-run.
-        let path = std::env::temp_dir().join(format!("systemrdl-fmt-{}-{tag}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("rdlfmt-{}-{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("create temp dir");
         TempDir(path)

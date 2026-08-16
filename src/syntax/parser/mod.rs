@@ -38,7 +38,7 @@
 //! What makes it safe is that a formatter has no obligation to *understand* a
 //! conditional, only to avoid breaking it -- and preprocessing depends on
 //! nothing but the sequence of tokens and the rule that a directive owns its
-//! line. `systemrdl_fmt::format` verifies the first (its output lexes to the
+//! line. [`crate::format`] verifies the first (its output lexes to the
 //! same token stream as its input) and the formatter guarantees the second, so
 //! whatever it does with the whitespace in between, the preprocessed result is
 //! unchanged for every set of macro definitions at once.
@@ -71,9 +71,9 @@
 
 mod grammar;
 
-use crate::kind::SyntaxKind;
-use crate::lexer::{Lexed, lex};
-use crate::syntax::SyntaxNode;
+use crate::syntax::kind::SyntaxKind;
+use crate::syntax::lexer::{Lexed, lex};
+use crate::syntax::tree::SyntaxNode;
 use rowan::{Checkpoint, GreenNode, GreenNodeBuilder};
 use std::ops::Range;
 

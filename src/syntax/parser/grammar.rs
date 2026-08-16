@@ -4,7 +4,7 @@
 //! where this deliberately diverges from the reference grammar.
 
 use super::Parser;
-use crate::kind::SyntaxKind::{self, *};
+use crate::syntax::kind::SyntaxKind::{self, *};
 
 //--------------------------------------------------------------------------
 // Token sets

@@ -6,7 +6,7 @@
 //! what makes the lossless syntax tree possible downstream, and it is enforced
 //! by the round-trip tests.
 
-use crate::kind::SyntaxKind;
+use crate::syntax::kind::SyntaxKind;
 use logos::Logos;
 use rowan::{TextRange, TextSize};
 

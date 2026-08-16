@@ -34,8 +34,8 @@
 //! `reg`, is not that rule's problem.
 
 use crate::formatter::{Formatter, Sep};
+use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use rowan::NodeOrToken;
-use systemrdl_syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
 pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
     use SyntaxKind::*;

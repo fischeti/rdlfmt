@@ -4,9 +4,9 @@
 //! input completely and contiguously. Everything downstream depends on it, so
 //! these run over the real sample plus a pile of adversarial snippets.
 
-use systemrdl_syntax::{SyntaxKind, lex};
+use rdlfmt::syntax::{SyntaxKind, lex};
 
-const SAMPLE: &str = include_str!("../../../samples/sample.rdl");
+const SAMPLE: &str = include_str!("../samples/sample.rdl");
 
 /// Every snippet here gets round-tripped, including the deliberately broken
 /// ones -- garbage input must survive the lexer intact, not be dropped.

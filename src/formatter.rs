@@ -45,8 +45,8 @@
 //! for a whole region rather than state of one gap -- and the one thing here
 //! that outlives a gap. See [`Formatter::allow_blank_lines`].
 
+use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use rowan::TextSize;
-use systemrdl_syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
 /// Spaces per indentation level, as the PeakRDL style guide asks for.
 ///

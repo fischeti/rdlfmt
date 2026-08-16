@@ -5,9 +5,9 @@
 //! says it should, and that the tree *shape* is right -- mostly operator
 //! precedence, where a formatter would otherwise silently reparenthesise.
 
-use systemrdl_syntax::{SyntaxElement, SyntaxNode, parse};
+use rdlfmt::syntax::{SyntaxElement, SyntaxNode, parse};
 
-const SAMPLE: &str = include_str!("../../../samples/sample.rdl");
+const SAMPLE: &str = include_str!("../samples/sample.rdl");
 
 /// Well-formed SystemRDL covering constructs the sample does not reach.
 const VALID: &[&str] = &[

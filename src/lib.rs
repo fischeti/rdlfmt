@@ -3,7 +3,7 @@
 //! ```text
 //! source text
 //!     |
-//!     v  systemrdl-syntax    lossless CST, comments and all
+//!     v  syntax              lossless CST, comments and all
 //!     v  rules               one function per node kind
 //!     v  formatter           direct emission into a String
 //! ```
@@ -41,14 +41,16 @@
 //! refused by the same check as any other input the parser could not follow.
 //! Everything else formats like a comment -- its own line, indented with the
 //! code around it, payload untouched. See the module docs in
-//! [`systemrdl_syntax::parser`] for why ignoring a conditional cannot corrupt
+//! [`crate::syntax::parser`] for why ignoring a conditional cannot corrupt
 //! the file.
+
+pub mod syntax;
 
 mod formatter;
 mod rules;
 
+use crate::syntax::{ParseError, SyntaxKind, lex, parse};
 use formatter::Formatter;
-use systemrdl_syntax::{ParseError, SyntaxKind, lex, parse};
 
 /// Why no formatted output was produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +91,7 @@ impl std::fmt::Display for FormatError {
             FormatError::Corrupted(what) => write!(
                 f,
                 "internal error: formatting would have changed the code ({what}); \
-                 this is a bug in systemrdl-fmt, please report it"
+                 this is a bug in rdlfmt, please report it"
             ),
         }
     }
