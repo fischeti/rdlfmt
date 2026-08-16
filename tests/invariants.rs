@@ -819,3 +819,56 @@ fn refuses_a_conditional_that_splits_a_construct() {
     let err = format("`ifdef A\naddrmap top {\n`else\nregfile top {\n`endif\n};\n").unwrap_err();
     assert!(!err.errors().is_empty());
 }
+
+//--------------------------------------------------------------------------
+// Line endings
+//--------------------------------------------------------------------------
+//
+// A formatter that imposed its own would rewrite every line of a CRLF file,
+// turning a whitespace tidy-up into a whole-file diff for anyone on Windows.
+// These pin the input's ending to the output's. Note that `check` cannot catch
+// a regression here on its own: line endings live inside the whitespace it
+// filters out, which is why `format` checks them separately.
+
+/// Counts CR bytes, which is enough to tell the two styles apart.
+fn crs(src: &str) -> usize {
+    src.bytes().filter(|&b| b == b'\r').count()
+}
+
+#[test]
+fn crlf_input_stays_crlf() {
+    let out = check("addrmap top {\r\n    reg {} r;\r\n};\r\n");
+    assert_eq!(crs(&out), 3, "expected CRLF throughout, got {out:?}");
+}
+
+#[test]
+fn lf_input_stays_lf() {
+    let out = check("addrmap top {\n    reg {} r;\n};\n");
+    assert_eq!(crs(&out), 0, "expected LF throughout, got {out:?}");
+}
+
+/// The formatting still happens; only the endings are borrowed from the input.
+#[test]
+fn a_crlf_file_is_still_reformatted() {
+    let out = check("addrmap top{\r\n  reg{}r;\r\n};\r\n");
+    assert_eq!(out, "addrmap top {\r\n    reg {} r;\r\n};\r\n");
+}
+
+/// Blank-line handling counts `\n`, which CRLF also contains -- so the rule
+/// that caps runs of blank lines must not care which style it is looking at.
+#[test]
+fn blank_lines_collapse_under_crlf_too() {
+    let out = check("addrmap top {\r\n    reg {} a;\r\n\r\n\r\n\r\n    reg {} b;\r\n};\r\n");
+    assert_eq!(
+        out,
+        "addrmap top {\r\n    reg {} a;\r\n\r\n    reg {} b;\r\n};\r\n"
+    );
+}
+
+/// A file with no line break at all has no ending to preserve; LF is the
+/// default rather than an inference from nothing.
+#[test]
+fn a_single_line_file_gets_lf() {
+    let out = check("addrmap top {};");
+    assert_eq!(out, "addrmap top {};\n");
+}

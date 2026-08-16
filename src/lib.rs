@@ -50,7 +50,7 @@ mod formatter;
 mod rules;
 
 use crate::syntax::{ParseError, SyntaxKind, lex, parse};
-use formatter::Formatter;
+use formatter::{Formatter, line_ending};
 
 /// Why no formatted output was produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +140,16 @@ pub fn format(src: &str) -> Result<String, FormatError> {
 /// dropped comment is a real loss even though it changes no behaviour. The
 /// trim is what lets the formatter tidy trailing spaces inside one.
 fn verify(src: &str, out: &str) -> Result<(), FormatError> {
+    // Checked separately because the token comparison below cannot see it: line
+    // endings live inside the whitespace this function filters out, so silently
+    // rewriting every one of them would pass the check that follows.
+    let (want, got) = (line_ending(src), line_ending(out));
+    if want != got {
+        return Err(FormatError::Corrupted(format!(
+            "line endings changed from {want:?} to {got:?}"
+        )));
+    }
+
     let (before, after) = (lex(src), lex(out));
     let keep = |(kind, _): &(SyntaxKind, &str)| *kind != SyntaxKind::WHITESPACE;
     let mut before = before.iter().filter(keep);

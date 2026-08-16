@@ -123,6 +123,23 @@ pub(crate) struct Formatter<'a> {
     /// Whether the last thing written was a comment still waiting to find out
     /// what separated it from what follows. See [`Formatter::trivia`].
     after_comment: bool,
+    /// The line ending to write, taken from the input. See [`line_ending`].
+    eol: &'static str,
+}
+
+/// The line ending a file uses, judged by its first line break.
+///
+/// A formatter that imposed its own would rewrite every line of a CRLF file,
+/// turning a whitespace tidy-up into a whole-file diff for anyone on Windows.
+/// So the input decides, and there is nothing to configure.
+///
+/// Mixed files are settled by the first break rather than by counting. It is
+/// the ending the file already looks like it has, and a tie needs no rule.
+pub(crate) fn line_ending(src: &str) -> &'static str {
+    match src.find('\n') {
+        Some(i) if src.as_bytes()[..i].last() == Some(&b'\r') => "\r\n",
+        _ => "\n",
+    }
 }
 
 impl<'a> Formatter<'a> {
@@ -135,6 +152,7 @@ impl<'a> Formatter<'a> {
             blank_lines: true,
             saw_newline: false,
             after_comment: false,
+            eol: line_ending(src),
         }
     }
 
@@ -144,7 +162,7 @@ impl<'a> Formatter<'a> {
         let trimmed = self.out.trim_end().len();
         self.out.truncate(trimmed);
         if !self.out.is_empty() {
-            self.out.push('\n');
+            self.out.push_str(self.eol);
         }
         self.out
     }
@@ -251,7 +269,7 @@ impl<'a> Formatter<'a> {
 
     fn newline(&mut self, count: usize) {
         for _ in 0..count {
-            self.out.push('\n');
+            self.out.push_str(self.eol);
         }
         for _ in 0..self.indent * INDENT_WIDTH {
             self.out.push(' ');
