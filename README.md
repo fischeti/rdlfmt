@@ -3,6 +3,8 @@
 A formatter for [SystemRDL](https://www.accellera.org/downloads/standards/systemrdl) 2.0,
 following the [PeakRDL style guide](https://peakrdl.readthedocs.io/en/latest/style-guide.html).
 
+**[Documentation](https://fischeti.github.io/rdlfmt/)**
+
 Before:
 
 ```systemrdl
@@ -36,6 +38,11 @@ addrmap top {
 };
 ```
 
+Line breaks *between* statements are yours — note that the first register's
+properties stay split and the second's stay joined. There is nothing to
+configure, deliberately. See
+[What it does](https://fischeti.github.io/rdlfmt/style.html).
+
 ## Install
 
 A prebuilt binary, needing no toolchain of any kind:
@@ -44,123 +51,31 @@ A prebuilt binary, needing no toolchain of any kind:
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/fischeti/rdlfmt/releases/latest/download/rdlfmt-installer.sh | sh
 ```
 
-On Windows:
-
-```powershell
-powershell -c "irm https://github.com/fischeti/rdlfmt/releases/latest/download/rdlfmt-installer.ps1 | iex"
-```
-
-From PyPI, which is convenient if you already manage `peakrdl` this way. The
-package is the Rust binary in a wheel, not a Python program, so it pulls in
-nothing else:
+Or, if you already manage `peakrdl` with a Python tool:
 
 ```bash
 uv tool install rdlfmt
 ```
 
-Or without installing at all:
-
-```bash
-uvx rdlfmt --check .
-```
-
-From crates.io, if you have a Rust toolchain:
-
-```bash
-cargo install rdlfmt
-```
-
-Or build from source (Rust 1.88+):
-
-```bash
-cargo build --release
-```
-
-## As a PeakRDL plugin
-
-Installed into the same environment as [PeakRDL](https://peakrdl.readthedocs.io),
-the wheel also registers a `peakrdl fmt` subcommand:
-
-```bash
-uv tool install peakrdl-cli --with rdlfmt
-```
-
-```bash
-peakrdl fmt --check .
-```
+Installed alongside [PeakRDL](https://peakrdl.readthedocs.io), the same wheel
+registers a `peakrdl fmt` subcommand. `cargo install rdlfmt` works too. See
+[Installation](https://fischeti.github.io/rdlfmt/installation.html) for
+Windows, PyPI and building from source.
 
 ## Usage
 
-Format a file, rewriting it in place — this is the default, and what you want
-most of the time:
-
 ```bash
-rdlfmt regs.rdl
+rdlfmt regs.rdl     # rewrite in place -- the default
+rdlfmt .            # every .rdl file in the tree
+rdlfmt --check .    # exit 1 if anything is unformatted; the one for CI
+rdlfmt --diff .     # ...and show what would change
+rdlfmt -            # filter stdin to stdout
 ```
 
-Format every `.rdl` file in a directory tree:
-
-```bash
-rdlfmt .
-```
-
-Check without writing anything. Exits 1 if any file is not formatted, which is
-the one for CI:
-
-```bash
-rdlfmt --check .
-```
-
-Same, but show what would change:
-
-```bash
-rdlfmt --diff regs.rdl
-```
-
-Write to stdout and leave the file alone:
-
-```bash
-rdlfmt --stdout regs.rdl
-```
-
-With no path at all, it reads stdin and writes stdout:
-
-```bash
-cat regs.rdl | rdlfmt
-```
-
-## What it does
-
-The style guide's rules, applied mechanically: four spaces per level and never
-tabs, opening brace on the same line as the statement it belongs to, closing
-brace on its own line followed by the instance name, spaces around assignment
-and expression operators, no space before the `;` that follows a `}`.
-
-Line breaks *between* statements are yours. `rdlfmt` neither forces one
-statement per line nor joins them, so grouping you put there on purpose
-survives — which is also how the style guide's `sw`/`hw` exception is
-accommodated without a special case. Note the two registers in the example
-above: the first one's properties stay split, the second's stay joined. Runs of
-blank lines collapse to one.
-
-There is nothing to configure, deliberately. A formatter earns its value by
-ending arguments, not by relocating them into a config file.
-
-Comments and preprocessor directives survive. The parser builds a lossless
-concrete syntax tree, so every byte of the input is present in the tree —
-a `` `ifdef `` or a trailing `//` comment is data to be placed, not noise to be
-dropped.
-
-## What it will not do
-
-**Format a file it did not fully understand.** If the input has syntax errors,
-`rdlfmt` reports them and refuses, rather than reformatting a structure it had
-to guess at.
-
-**Change your code.** Every result is verified before it is returned: the output
-is re-lexed and compared token by token against the input, and if anything but
-whitespace moved, the output is withheld and you get a bug report instead of a
-damaged file. That check is what makes rewriting files in place the default.
+That last one is what editors want:
+[Editor integration](https://fischeti.github.io/rdlfmt/editors.html) has
+format-on-save recipes for Neovim, Vim, VS Code, Zed, Helix and Emacs. Full
+command line in [Usage](https://fischeti.github.io/rdlfmt/usage.html).
 
 ## Library
 
@@ -170,8 +85,8 @@ The formatter is also a library:
 let formatted = rdlfmt::format(source)?;
 ```
 
-`rdlfmt::syntax` exposes the lexer and the CST underneath, if you want the tree
-rather than the text. Turn off default features to drop the CLI dependencies.
+`rdlfmt::syntax` exposes the lexer and the lossless CST underneath. API docs on
+[docs.rs](https://docs.rs/rdlfmt).
 
 ## License
 

@@ -1,3 +1,5 @@
 /target
 docs/*.pdf
+docs/_build/
 __pycache__/
+.venv/

@@ -23,7 +23,8 @@ classifiers = [
 dynamic = ["version"]
 
 [project.urls]
-Homepage = "https://github.com/fischeti/rdlfmt"
+Homepage = "https://fischeti.github.io/rdlfmt"
+Documentation = "https://fischeti.github.io/rdlfmt"
 Repository = "https://github.com/fischeti/rdlfmt"
 Issues = "https://github.com/fischeti/rdlfmt/issues"
 
