@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Directory walks honour `.gitignore` and `.ignore`, so `target/` and `build/`
+  stay out of `rdlfmt .`. Naming a path outright still formats it either way.
+- Directory walks are faster: 124 ms to 48 ms on a 48k-entry tree, and 7.1 ms
+  to 0.5 ms where an ignore file prunes a build directory outright.
+
+### Fixed
+
+- A symlinked directory is no longer followed, so a link pointing at its own
+  ancestor no longer formats the same file dozens of times over.
+
 ## [0.1.1] - 2026-08-17
 
 ### Added
@@ -44,5 +58,6 @@ First release.
   lossless rowan CST underneath. The CLI dependencies sit behind the default
   `cli` feature, so library users can turn them off.
 
-[Unreleased]: https://github.com/fischeti/rdlfmt/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/fischeti/rdlfmt/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/fischeti/rdlfmt/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/fischeti/rdlfmt/releases/tag/v0.1.0
