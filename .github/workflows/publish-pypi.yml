@@ -32,7 +32,7 @@ jobs:
           - { runner: macos-15-intel, target: x86_64,  manylinux: auto }
           - { runner: windows-latest, target: x64,     manylinux: auto }
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # `manylinux: auto` builds inside a manylinux container, which is what
       # earns the manylinux_2_17 tag. PyPI rejects a wheel tagged plain `linux`,
       # so this is a hard requirement on Linux rather than a nicety. It is
@@ -50,7 +50,7 @@ jobs:
   sdist:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: PyO3/maturin-action@v1
         with:
           command: sdist
