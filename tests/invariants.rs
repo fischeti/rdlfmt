@@ -477,7 +477,7 @@ fn external_and_alias_instantiations_are_spaced() {
         check("addrmap a {\n    external  my_reg  r@0x0;\n    alias  r  my_reg  s@0x4;\n};\n");
     assert_eq!(
         out,
-        "addrmap a {\n    external my_reg r @ 0x0;\n    alias r my_reg s @ 0x4;\n};\n"
+        "addrmap a {\n    external my_reg r @ 0x0;\n    alias r  my_reg s @ 0x4;\n};\n"
     );
 }
 
@@ -579,7 +579,7 @@ fn more_than_one_parameter_goes_one_per_line() {
     let out = check("reg r #(longint unsigned W = 32, boolean S = true) {};\n");
     assert_eq!(
         out,
-        "reg r #(\n    longint unsigned W = 32,\n    boolean S = true\n) {};\n"
+        "reg r #(\n    longint unsigned W = 32,\n    boolean          S = true\n) {};\n"
     );
 }
 
@@ -871,4 +871,156 @@ fn blank_lines_collapse_under_crlf_too() {
 fn a_single_line_file_gets_lf() {
     let out = check("addrmap top {};");
     assert_eq!(out, "addrmap top {};\n");
+}
+
+//--------------------------------------------------------------------------
+// Alignment. Padding rather than layout: every test here would still pass
+// with the same tokens on the same lines if the columns were switched off,
+// which is what makes it safe to argue about them separately.
+//--------------------------------------------------------------------------
+
+#[test]
+fn instantiations_in_a_run_line_up() {
+    let out = check("addrmap a {\n    r ctrl @ 0x0;\n    r status @ 0x4;\n};\n");
+    assert_eq!(
+        out,
+        "addrmap a {\n    r ctrl   @ 0x0;\n    r status @ 0x4;\n};\n"
+    );
+}
+
+/// The modifier is a column even where it is absent, so an instantiation with
+/// no `external` lines its *type* up with the rest of the run rather than
+/// starting where the modifiers do.
+#[test]
+fn a_missing_modifier_leaves_an_empty_cell() {
+    let out = check("addrmap a {\n    external x b @ 0x0;\n    y c @ 0x4;\n};\n");
+    assert_eq!(
+        out,
+        "addrmap a {\n    external x b @ 0x0;\n             y c @ 0x4;\n};\n"
+    );
+}
+
+/// A blank line is the author saying these are two groups, and grouping outranks
+/// alignment: what the author has said about a file is not the formatter's to
+/// overrule. See `Formatter::allow_blank_lines` for the same principle applied
+/// to the other axis.
+#[test]
+fn a_blank_line_ends_a_run() {
+    let out = check("addrmap a {\n    r ctrl @ 0x0;\n\n    r status @ 0x4;\n};\n");
+    assert_eq!(
+        out,
+        "addrmap a {\n    r ctrl @ 0x0;\n\n    r status @ 0x4;\n};\n"
+    );
+}
+
+/// A row that runs out of cells ends the column. An instantiation with no
+/// address closes no cell around its name, so however long that name is it
+/// cannot stretch the address column of the rows above it.
+#[test]
+fn a_row_with_fewer_cells_ends_the_column() {
+    let out = check("addrmap a {\n    r ctrl @ 0x0;\n    r s @ 0x4;\n    r loooooong;\n};\n");
+    assert_eq!(
+        out,
+        "addrmap a {\n    r ctrl @ 0x0;\n    r s    @ 0x4;\n    r loooooong;\n};\n"
+    );
+}
+
+/// Nothing to line up with, so nothing is padded -- which is what keeps a lone
+/// statement looking the same as it did before there were columns at all.
+#[test]
+fn a_statement_on_its_own_is_not_padded() {
+    let out = check("addrmap a {\n    external x b @ 0x0;\n};\n");
+    assert_eq!(out, "addrmap a {\n    external x b @ 0x0;\n};\n");
+}
+
+/// Rows align only at equal depth: a nested body has its own widths, and
+/// padding it out to its parent's would align things that are not in a list
+/// together.
+#[test]
+fn indentation_separates_runs() {
+    let out = check(
+        "addrmap a {\n    r ctrl @ 0x0;\n    addrmap b {\n        r c @ 0x0;\n        r dddd @ 0x4;\n    } inner @ 0x100;\n};\n",
+    );
+    assert_eq!(
+        out,
+        "addrmap a {\n    r ctrl @ 0x0;\n    addrmap b {\n        r c    @ 0x0;\n        r dddd @ 0x4;\n    } inner @ 0x100;\n};\n"
+    );
+}
+
+/// A statement broken over several lines is not a row, so it neither aligns nor
+/// widens the rows around it.
+#[test]
+fn a_multiline_statement_is_left_alone() {
+    let out = check(
+        "addrmap a {\n    r ctrl @ 0x0;\n    r #(.W(1), .X(2)) wide @ 0x4;\n    r s @ 0x8;\n};\n",
+    );
+    assert_eq!(
+        out,
+        "addrmap a {\n    r ctrl @ 0x0;\n    r #(\n        .W(1),\n        .X(2)\n    ) wide @ 0x4;\n    r s @ 0x8;\n};\n"
+    );
+}
+
+/// A broken parameter list is a run of rows like any other. A flat one is a
+/// single row, and `parameter_lists_are_not_padded` covers that it stays one.
+#[test]
+fn broken_parameter_lists_line_up() {
+    let out = check("reg r #(longint unsigned W = 32, boolean S = true) {};\n");
+    assert_eq!(
+        out,
+        "reg r #(\n    longint unsigned W = 32,\n    boolean          S = true\n) {};\n"
+    );
+}
+
+#[test]
+fn enum_entries_line_up() {
+    let out = check("enum e {\n    IDLE = 0;\n    RUNNING = 1;\n};\n");
+    assert_eq!(out, "enum e {\n    IDLE    = 0;\n    RUNNING = 1;\n};\n");
+}
+
+/// An entry with a body breaks its line, so it is not part of the run -- and the
+/// run does not resume across it, because a column needs adjacent rows.
+#[test]
+fn an_enum_entry_with_a_body_leaves_the_run() {
+    let out =
+        check("enum e {\n    IDLE = 0;\n    BUSY = 1 { name = \"b\"; };\n    DONE = 2;\n};\n");
+    assert_eq!(
+        out,
+        "enum e {\n    IDLE = 0;\n    BUSY = 1 {\n        name = \"b\";\n    };\n    DONE = 2;\n};\n"
+    );
+}
+
+/// The column alignment is most often wanted for, and the one the rules can only
+/// reach through the trivia path.
+#[test]
+fn trailing_comments_line_up() {
+    let out = check("addrmap a {\n    r ctrl @ 0x0; // one\n    r s @ 0x1000; // two\n};\n");
+    assert_eq!(
+        out,
+        "addrmap a {\n    r ctrl @ 0x0;    // one\n    r s    @ 0x1000; // two\n};\n"
+    );
+}
+
+/// A comment on the line *before* a statement is not in that statement's row,
+/// even though the parser hands it over as leading trivia. Treating it as one
+/// would decline every annotated instantiation in a file.
+#[test]
+fn a_leading_comment_does_not_end_a_run() {
+    let out = check("addrmap a {\n    // why\n    r ctrl @ 0x0;\n    r status @ 0x4;\n};\n");
+    assert_eq!(
+        out,
+        "addrmap a {\n    // why\n    r ctrl   @ 0x0;\n    r status @ 0x4;\n};\n"
+    );
+}
+
+/// Padding is whitespace, so it must survive the same round trip as the rest:
+/// a second format has to compute the same columns from output that already has
+/// them, which is only true because a cell's width is measured from the cell
+/// before it and never from the column it landed in.
+#[test]
+fn alignment_is_a_fixed_point() {
+    let once = check(
+        "addrmap a {\n    external x bbbb @ 0x0;\n    y c @ 0x4; // hm\n    y dd @ 0x8;\n};\n",
+    );
+    let twice = check(&once);
+    assert_eq!(once, twice);
 }

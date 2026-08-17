@@ -45,8 +45,10 @@
 //! for a whole region rather than state of one gap -- and the one thing here
 //! that outlives a gap. See [`Formatter::allow_blank_lines`].
 
+use crate::align::{self, Column, Mark};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use rowan::TextSize;
+use std::collections::VecDeque;
 
 /// Spaces per indentation level, as the PeakRDL style guide asks for.
 ///
@@ -125,6 +127,15 @@ pub(crate) struct Formatter<'a> {
     after_comment: bool,
     /// The line ending to write, taken from the input. See [`line_ending`].
     eol: &'static str,
+    /// Source offsets whose tokens begin a new alignment cell, in source order.
+    /// Filled in by rules, consumed by [`Formatter::token`].
+    watch: VecDeque<(TextSize, Column)>,
+    /// Cell boundaries recorded so far, for [`align::align`] to pad.
+    marks: Vec<Mark>,
+    /// Which output line we are on, and where its content starts. Both exist
+    /// only to measure cells, and are maintained by whatever writes a newline.
+    row: usize,
+    line_start: usize,
 }
 
 /// The line ending a file uses, judged by its first line break.
@@ -153,12 +164,20 @@ impl<'a> Formatter<'a> {
             saw_newline: false,
             after_comment: false,
             eol: line_ending(src),
+            watch: VecDeque::new(),
+            marks: Vec::new(),
+            row: 0,
+            line_start: 0,
         }
     }
 
-    /// Finishes the file: exactly one trailing newline, or nothing at all if
-    /// there was no content.
+    /// Finishes the file: columns padded, then exactly one trailing newline, or
+    /// nothing at all if there was no content.
+    ///
+    /// Alignment happens here rather than in the rules because it is the one
+    /// thing that cannot be decided while writing; see [`crate::align`].
     pub(crate) fn finish(mut self) -> String {
+        self.out = align::align(self.out, &self.marks);
         let trimmed = self.out.trim_end().len();
         self.out.truncate(trimmed);
         if !self.out.is_empty() {
@@ -271,9 +290,71 @@ impl<'a> Formatter<'a> {
         for _ in 0..count {
             self.out.push_str(self.eol);
         }
+        self.row += count;
         for _ in 0..self.indent * INDENT_WIDTH {
             self.out.push(' ');
         }
+        // After the indent, so that a row's first cell is measured from its
+        // content. Rows only align at equal depth, so it would cancel out
+        // either way, but a width that means what it says is easier to trust.
+        self.line_start = self.out.len();
+    }
+
+    //----------------------------------------------------------------------
+    // Alignment
+    //----------------------------------------------------------------------
+
+    /// Asks that each of `offsets` begin a new alignment cell.
+    ///
+    /// The offsets are *source* offsets of tokens yet to be written, which is
+    /// what lets a rule speak for a boundary it does not itself emit: the `@` of
+    /// an instantiation's address is three levels below the statement whose row
+    /// it belongs to, and the writer will recognise it wherever recursion
+    /// happens to reach it. See [`crate::align`].
+    pub(crate) fn align_at(&mut self, column: Column, offsets: impl IntoIterator<Item = TextSize>) {
+        self.watch
+            .extend(offsets.into_iter().map(|offset| (offset, column)));
+    }
+
+    /// Records a boundary if the token starting at `start` was watched for.
+    ///
+    /// The gap is spent *before* the boundary is recorded, because the separator
+    /// belongs to the cell being closed -- padding goes after it, never instead
+    /// of it.
+    ///
+    /// Anything still watched for from before `start` is dropped: offsets are
+    /// watched in source order, so a token has passed the point where it could
+    /// have matched. That happens when a rule asks to align on something the
+    /// tree turns out not to have.
+    fn open_cell(&mut self, start: TextSize) {
+        while self.watch.front().is_some_and(|&(at, _)| at < start) {
+            self.watch.pop_front();
+        }
+        if let Some(&(at, column)) = self.watch.front()
+            && at == start
+        {
+            self.watch.pop_front();
+            self.materialize();
+            self.mark(column);
+        }
+    }
+
+    /// Records a cell boundary at the end of the output as it now stands.
+    fn mark(&mut self, column: Column) {
+        let start = match self.marks.last() {
+            Some(mark) if mark.row == self.row => mark.offset,
+            _ => self.line_start,
+        };
+        self.marks.push(Mark {
+            row: self.row,
+            offset: self.out.len(),
+            // Chars rather than bytes: a cell is being lined up on screen. Not
+            // grapheme clusters or East Asian width -- identifiers are ASCII,
+            // and the one thing that is not is a string literal, which is a
+            // whole cell and so cannot be misaligned by mismeasuring it.
+            width: self.out[start..].chars().count(),
+            key: (column, self.indent),
+        });
     }
 
     //----------------------------------------------------------------------
@@ -287,6 +368,13 @@ impl<'a> Formatter<'a> {
     fn write_raw(&mut self, text: &str) {
         self.materialize();
         self.out.push_str(text);
+        // A multi-line block comment is the one thing that reaches the output
+        // without going through `newline`, so the row counter has to be caught
+        // up here or every mark after one would be attributed to the wrong line.
+        if let Some(last) = text.rfind('\n') {
+            self.row += text.bytes().filter(|&b| b == b'\n').count();
+            self.line_start = self.out.len() - (text.len() - last - 1);
+        }
     }
 
     /// Writes a significant token verbatim.
@@ -297,6 +385,7 @@ impl<'a> Formatter<'a> {
     /// author wrote is not the formatter's business.
     pub(crate) fn token(&mut self, tok: &SyntaxToken) {
         debug_assert!(!tok.kind().is_trivia(), "trivia must go through trivia()");
+        self.open_cell(tok.text_range().start());
         self.write_raw(tok.text());
         self.saw_newline = false;
         self.after_comment = false;
@@ -362,6 +451,11 @@ impl<'a> Formatter<'a> {
                 } else {
                     self.request(Sep::Space);
                 }
+                // After the separation is settled and before the text is
+                // written, as in `token`. A trailing comment is a cell like any
+                // other -- it is the column most worth lining up, and the one
+                // the rules can only reach through here.
+                self.open_cell(tok.text_range().start());
                 self.write_raw(tok.text());
                 if kind == SyntaxKind::LINE_COMMENT {
                     // A line comment swallows the rest of its line, so anything

@@ -6,6 +6,7 @@
 //!     v  syntax              lossless CST, comments and all
 //!     v  rules               one function per node kind
 //!     v  formatter           direct emission into a String
+//!     v  align               columns padded once the widths are known
 //! ```
 //!
 //! # Why there is no intermediate representation
@@ -15,18 +16,26 @@
 //! a list fits on one line cannot be known until everything inside it has been
 //! laid out, so the decision has to be deferred and the alternatives measured.
 //!
-//! None of the rules here are width-dependent. Following the PeakRDL style
-//! guide, braces always break, statements are one per line, expressions never
-//! break, and a parenthesised list breaks when it holds more than one element.
-//! Every one of those is decidable from the tree alone, before a single
-//! character is written. With nothing to defer there is nothing for a document
-//! IR to represent, so rules write straight into the output buffer.
+//! No *decision* here is width-dependent. Following the PeakRDL style guide,
+//! braces always break, statements are one per line, expressions never break,
+//! and a parenthesised list breaks when it holds more than one element. Every
+//! one of those is decidable from the tree alone, before a single character is
+//! written. With nothing to defer there is nothing for a document IR to
+//! represent, so rules write straight into the output buffer.
 //!
 //! Each decision that does exist is still isolated in its own function
 //! returning a layout, rather than being spelled out inline at the point of
 //! emission. Should one of them ever need to consult rendered width, it can
 //! render flat into a scratch buffer and measure it -- at the size of a
 //! register description the cost of that is not worth an IR to avoid.
+//!
+//! One thing *is* width-dependent, and it is deliberately not a decision:
+//! the `align` pass pads runs of similar statements into columns, which cannot be
+//! settled while writing because the padding in front of a cell depends on the
+//! widest cell in a neighbouring row. It is a pass over the finished text rather
+//! than an IR, because by then every token is already on the line it belongs on
+//! -- all that is left to compute is how many spaces sit in gaps that the rules
+//! have already put there. Switching it off would move no token to another line.
 //!
 //! # What the formatter will not do
 //!
@@ -46,6 +55,7 @@
 
 pub mod syntax;
 
+mod align;
 mod formatter;
 mod rules;
 
