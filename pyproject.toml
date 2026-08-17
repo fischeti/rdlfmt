@@ -27,12 +27,24 @@ Homepage = "https://github.com/fischeti/rdlfmt"
 Repository = "https://github.com/fischeti/rdlfmt"
 Issues = "https://github.com/fischeti/rdlfmt/issues"
 
+# Registers `peakrdl fmt` when this wheel is installed alongside PeakRDL. The
+# key is the subcommand name -- PeakRDL takes it from the entry point, not from
+# the class. See python/rdlfmt/__peakrdl__.py.
+[project.entry-points."peakrdl.exporters"]
+fmt = "rdlfmt.__peakrdl__:Formatter"
+
 [tool.maturin]
-# Ship the Rust binary itself as the package: no PyO3, no bindings, no Python
-# code at all. maturin puts it in the wheel's scripts directory, which is what
-# lands it on PATH for `uv tool install rdlfmt` and `uvx rdlfmt`.
+# Ship the Rust binary itself as the package: no PyO3, no bindings. maturin
+# puts it in the wheel's scripts directory, which is what lands it on PATH for
+# `uv tool install rdlfmt` and `uvx rdlfmt`.
 #
 # The consequence is that wheels are platform-specific but Python-agnostic --
 # tagged `py3-none-<platform>` -- so the release matrix is one build per
 # platform rather than platform x interpreter version.
 bindings = "bin"
+
+# The only Python in the wheel is the PeakRDL plugin descriptor, which is inert
+# unless PeakRDL loads it. maturin allows this mixed layout alongside `bin`
+# bindings without changing the wheel tag, so the plugin costs the release
+# matrix nothing and `uv tool install rdlfmt` still pulls in no dependencies.
+python-source = "python"

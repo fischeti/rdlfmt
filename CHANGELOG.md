@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A PeakRDL plugin. Installed alongside PeakRDL, the same wheel registers a
+  `peakrdl fmt` subcommand — `uv tool install peakrdl-cli --with rdlfmt`.
+  Unlike PeakRDL's other subcommands it does not compile or elaborate its
+  input, since formatting needs the source text rather than the register model,
+  so it formats files that parse but do not yet elaborate.
+
 ## [0.1.0] - 2026-08-16
 
 First release.
