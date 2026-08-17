@@ -24,7 +24,7 @@ jobs:
       # Required to mint the OIDC token that the auth action trades in.
       id-token: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
