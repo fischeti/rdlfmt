@@ -19,11 +19,24 @@ Format every ``.rdl`` file in a directory tree:
 
     rdlfmt .
 
-The walk skips entries whose name begins with a dot, so ``.git`` and friends
-stay out of it without ``rdlfmt`` needing to know what a VCS is. Files that are
-already formatted are left untouched rather than rewritten with identical
-bytes, so formatting a tree does not bump every mtime and set every rebuild
-going.
+What the walk descends into is what ``git`` would consider part of the tree:
+``.gitignore`` and ``.ignore`` are honoured, and entries whose name begins with
+a dot are skipped. Between them that keeps ``.git``, ``target/`` and ``build/``
+out of it without a flag and without ``rdlfmt`` needing to know what any of
+those are. A ``.gitignore`` applies whether or not there is still a ``.git``
+beside it, so an exported or vendored tree behaves like the one it came from.
+
+Ignore rules only prune what a walk *discovers*. Naming a path outright formats
+it either way:
+
+.. code-block:: bash
+
+    rdlfmt build/regs.rdl    # formatted, even though build/ is ignored
+    rdlfmt build/            # searched, even though build/ is ignored
+
+Files that are already formatted are left untouched rather than rewritten with
+identical bytes, so formatting a tree does not bump every mtime and set every
+rebuild going.
 
 
 Other modes

@@ -18,7 +18,7 @@ exclude = ["docs/", "sample.cst"]
 default = ["cli"]
 # The `rdlfmt` binary. The library half depends on none of these, so a
 # consumer of `rdlfmt::format` can turn the whole CLI off.
-cli = ["dep:anstyle", "dep:clap", "dep:similar"]
+cli = ["dep:anstyle", "dep:clap", "dep:ignore", "dep:similar"]
 
 [[bin]]
 name = "rdlfmt"
@@ -34,6 +34,7 @@ rowan = "0.17.0"
 
 anstyle = { version = "1.0", optional = true }
 clap = { version = "4.5", features = ["derive"], optional = true }
+ignore = { version = "0.4", optional = true }
 similar = { version = "3.1", optional = true }
 
 # The profile that 'dist' will build with

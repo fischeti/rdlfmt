@@ -39,7 +39,8 @@ const STYLES: Styles = Styles::styled()
     about = "Format SystemRDL source",
     long_about = "Format SystemRDL source.\n\n\
                   Rewrites each PATH in place. A directory is searched for `.rdl` \
-                  files. With no PATH, reads stdin and writes stdout.",
+                  files, skipping anything `.gitignore` or a leading dot excludes. \
+                  With no PATH, reads stdin and writes stdout.",
     styles = STYLES,
 )]
 struct Cli {
@@ -164,20 +165,61 @@ impl Run {
 
     fn path(&mut self, path: &Path) {
         if path.is_dir() {
-            match rdl_files(path) {
-                Ok(files) => {
-                    for file in files {
-                        self.file(&file);
-                    }
-                }
-                Err(err) => {
-                    eprintln!("error: {}: {err}", path.display());
-                    self.failed += 1;
-                }
+            for file in self.rdl_files(path) {
+                self.file(&file);
             }
         } else {
             self.file(path);
         }
+    }
+
+    /// Every `.rdl` file under `dir`, sorted so that output is reproducible.
+    ///
+    /// What the walk descends into is what `git` would consider part of the
+    /// tree: `.gitignore` and `.ignore` are honoured, and entries whose name
+    /// starts with a `.` are skipped. Between them that keeps `rdlfmt .` out
+    /// of `.git`, `target/` and `build/` without a flag and without `rdlfmt`
+    /// needing to know what any of those are.
+    ///
+    /// Ignore rules only prune what a *walk discovers*. Naming a path
+    /// outright -- `rdlfmt build/regs.rdl`, or `rdlfmt build/` -- formats it
+    /// either way, because asking for something by name is a clearer
+    /// statement of intent than a pattern written for some other tool.
+    ///
+    /// A walk error is reported against the entry it happened on and the walk
+    /// carries on, so one unreadable directory does not cost you the rest of
+    /// the tree.
+    fn rdl_files(&mut self, dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+
+        let walk = ignore::WalkBuilder::new(dir)
+            // Off by default outside a git repository, which would make an
+            // exported or vendored tree behave differently from the one it
+            // came from. The `.gitignore` is the statement of intent; whether
+            // `.git` happens to still be next to it is not.
+            .require_git(false)
+            .build();
+
+        for entry in walk {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    self.failed += 1;
+                    continue;
+                }
+            };
+            // `None` only for stdin, which cannot turn up in a walk.
+            if !entry.file_type().is_some_and(|ty| ty.is_file()) {
+                continue;
+            }
+            if entry.path().extension().is_some_and(|ext| ext == "rdl") {
+                out.push(entry.into_path());
+            }
+        }
+
+        out.sort();
+        out
     }
 
     fn file(&mut self, path: &Path) {
@@ -270,36 +312,6 @@ impl Run {
 
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
-}
-
-/// Every `.rdl` file under `dir`, sorted so that output is reproducible.
-///
-/// Entries whose name starts with `.` are skipped, which keeps `rdlfmt .`
-/// out of `.git` without needing to know what a VCS is.
-fn rdl_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    let mut stack = vec![dir.to_path_buf()];
-
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)? {
-            let path = entry?.path();
-            let hidden = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with('.'));
-            if hidden {
-                continue;
-            }
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|ext| ext == "rdl") {
-                out.push(path);
-            }
-        }
-    }
-
-    out.sort();
-    Ok(out)
 }
 
 /// Byte offset to 1-based line and column, for diagnostics.

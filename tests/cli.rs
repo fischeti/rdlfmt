@@ -269,6 +269,92 @@ fn a_directory_is_searched_for_rdl_files() {
 }
 
 #[test]
+fn a_gitignored_path_is_not_walked_into() {
+    let dir = TempDir::new("gitignore");
+    dir.write(".gitignore", "build/\ngenerated.rdl\n");
+    dir.write("src/a.rdl", UNFORMATTED);
+    dir.write("build/b.rdl", UNFORMATTED);
+    dir.write("build/deep/c.rdl", UNFORMATTED);
+    dir.write("src/generated.rdl", UNFORMATTED);
+
+    let out = run_in(&dir.0, &["."]);
+    assert_eq!(code(&out), 0);
+    assert_eq!(dir.read("src/a.rdl"), FORMATTED);
+    assert_eq!(dir.read("build/b.rdl"), UNFORMATTED, "walked into build/");
+    assert_eq!(
+        dir.read("build/deep/c.rdl"),
+        UNFORMATTED,
+        "walked below build/"
+    );
+    assert_eq!(
+        dir.read("src/generated.rdl"),
+        UNFORMATTED,
+        "ignored name was formatted"
+    );
+}
+
+#[test]
+fn gitignore_applies_without_a_git_directory() {
+    // The `.gitignore` is the statement of intent. An exported or vendored
+    // tree has no `.git` beside it and should still behave the same way.
+    let dir = TempDir::new("gitignore-nogit");
+    dir.write(".gitignore", "build/\n");
+    dir.write("a.rdl", UNFORMATTED);
+    dir.write("build/b.rdl", UNFORMATTED);
+
+    let out = run_in(&dir.0, &["."]);
+    assert_eq!(code(&out), 0);
+    assert_eq!(dir.read("a.rdl"), FORMATTED);
+    assert_eq!(dir.read("build/b.rdl"), UNFORMATTED, "walked into build/");
+}
+
+#[test]
+fn naming_an_ignored_path_formats_it_anyway() {
+    // Ignore rules prune what a walk discovers. They are not a veto on a path
+    // the user asked for by name.
+    let dir = TempDir::new("gitignore-explicit");
+    dir.write(".gitignore", "build/\n");
+    let file = dir.write("build/b.rdl", UNFORMATTED);
+    dir.write("build/deep/c.rdl", UNFORMATTED);
+
+    let out = run(&[file.to_str().unwrap()]);
+    assert_eq!(code(&out), 0);
+    assert_eq!(dir.read("build/b.rdl"), FORMATTED, "named file was skipped");
+
+    // ...and the same for naming the ignored directory itself.
+    let out = run_in(&dir.0, &["build"]);
+    assert_eq!(code(&out), 0);
+    assert_eq!(
+        dir.read("build/deep/c.rdl"),
+        FORMATTED,
+        "named directory was skipped"
+    );
+}
+
+// Unix only: creating a symlink on Windows wants either elevation or developer
+// mode, which is not something a test run can count on. The behaviour under
+// test is the walker's, and it does not vary by platform.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_directory_is_not_followed() {
+    // `is_dir()` follows symlinks, so a loop used to be walked until the OS
+    // ran out of link resolutions -- reporting the same file dozens of times,
+    // and under the default mode rewriting it just as often.
+    let dir = TempDir::new("symlink-loop");
+    dir.write("a.rdl", UNFORMATTED);
+    std::os::unix::fs::symlink(&dir.0, dir.0.join("loop")).expect("symlink");
+
+    let out = run_in(&dir.0, &["--check", "."]);
+    assert_eq!(code(&out), 1);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout.lines().count(),
+        1,
+        "a.rdl reported more than once: {stdout}"
+    );
+}
+
+#[test]
 fn a_file_that_does_not_parse_is_left_alone() {
     let dir = TempDir::new("broken");
     let path = dir.write("a.rdl", "addrmap a {\n");
