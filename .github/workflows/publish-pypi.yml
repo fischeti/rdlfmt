@@ -1,8 +1,9 @@
 # Runs on the same tag as release.yml, rather than as a dist publish-job.
 #
-# The wheels contain the Rust binary and no Python code (maturin's `bin`
-# bindings), so they are tagged `py3-none-<platform>`: one build per platform,
-# with no interpreter dimension to the matrix.
+# The wheels contain the Rust binary plus the PeakRDL plugin descriptor, which
+# is pure Python and interpreter-agnostic (maturin's `bin` bindings), so they
+# are tagged `py3-none-<platform>`: one build per platform, with no interpreter
+# dimension to the matrix.
 #
 # This does rebuild binaries that dist already built for the GitHub Release.
 # The artifacts are not interchangeable -- a wheel has to be produced by the

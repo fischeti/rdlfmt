@@ -76,6 +76,19 @@ Or build from source (Rust 1.88+):
 cargo build --release
 ```
 
+## As a PeakRDL plugin
+
+Installed into the same environment as [PeakRDL](https://peakrdl.readthedocs.io),
+the wheel also registers a `peakrdl fmt` subcommand:
+
+```bash
+uv tool install peakrdl-cli --with rdlfmt
+```
+
+```bash
+peakrdl fmt --check .
+```
+
 ## Usage
 
 Format a file, rewriting it in place — this is the default, and what you want
