@@ -97,7 +97,7 @@ impl std::fmt::Display for ParseError {
 
 /// The result of parsing: always a complete tree, plus any errors found.
 ///
-/// A tree is produced even for badly broken input -- unparseable stretches are
+/// A tree is produced even for badly broken input -- unparsable stretches are
 /// wrapped in [`SyntaxKind::ERROR`] nodes rather than discarded. Check
 /// [`Parsed::errors`] before formatting; rewriting a file the parser did not
 /// fully understand is how a formatter corrupts code.
