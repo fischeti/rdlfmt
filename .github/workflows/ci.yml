@@ -38,6 +38,15 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  pre-commit:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v7
+        - uses: dtolnay/rust-toolchain@stable
+        - uses: astral-sh/setup-uv@v10.0.1
+        - name: Run all hooks
+          run: uvx prek@0.4.11 run --all-files
+
   clippy:
     runs-on: ubuntu-latest
     steps:
