@@ -17,3 +17,8 @@ hosting = "github"
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
+
+# Unblocks dependabot PRs that update Github Action versions,
+# since `release.yml` is not allowed to be modified by hand.
+[dist.github-action-commits]
+"actions/checkout" = "v7.0.1"
