@@ -5,28 +5,29 @@
 //!     |
 //!     v  syntax              lossless CST, comments and all
 //!     v  rules               one function per node kind
-//!     v  formatter           direct emission into a String
+//!     v  formatter           annotated output and alignment
+//!     v  String              final rendering
 //! ```
 //!
-//! # Why there is no intermediate representation
+//! # A deliberately small intermediate representation
 //!
 //! Pretty-printers usually build a document IR (Wadler groups, Oppen's
 //! algorithm) because their layout decisions depend on rendered width: whether
 //! a list fits on one line cannot be known until everything inside it has been
 //! laid out, so the decision has to be deferred and the alternatives measured.
 //!
-//! None of the rules here are width-dependent. Following the PeakRDL style
+//! None of the *line breaking* rules here are width-dependent. Following the PeakRDL style
 //! guide, braces always break, statements are one per line, expressions never
 //! break, and a parenthesised list breaks when it holds more than one element.
 //! Every one of those is decidable from the tree alone, before a single
-//! character is written. With nothing to defer there is nothing for a document
-//! IR to represent, so rules write straight into the output buffer.
+//! character is written, so this formatter does not need groups, alternatives,
+//! or a fitting algorithm.
 //!
-//! Each decision that does exist is still isolated in its own function
-//! returning a layout, rather than being spelled out inline at the point of
-//! emission. Should one of them ever need to consult rendered width, it can
-//! render flat into a scratch buffer and measure it -- at the size of a
-//! register description the cost of that is not worth an IR to avoid.
+//! Column alignment does need hindsight. The formatter therefore retains a
+//! narrow IR over its ordinary output: semantic row and cell boundaries grouped
+//! into list-local scopes. Once every newline is final, an alignment pass
+//! measures adjacent one-line rows and inserts padding before the String is
+//! returned. Padding never feeds back into layout.
 //!
 //! # What the formatter will not do
 //!

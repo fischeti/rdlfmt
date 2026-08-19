@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Consecutive one-line component instantiations, parameter definitions, enum
+  entries, and trailing comments are aligned into columns. Blank lines,
+  multiline statements, and changes in nesting end an aligned run, while a
+  comment-only line does not.
+
 ### Changed
 
 - Directory walks honour `.gitignore` and `.ignore`, so `target/` and `build/`
