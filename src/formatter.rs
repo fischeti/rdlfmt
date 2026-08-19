@@ -47,6 +47,7 @@
 
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use rowan::TextSize;
+use std::collections::BTreeMap;
 
 /// Spaces per indentation level, as the PeakRDL style guide asks for.
 ///
@@ -103,6 +104,64 @@ struct Gap {
     width: Width,
 }
 
+/// A kind of physical row that may participate in an aligned run.
+///
+/// `Other` is deliberately represented too: a statement which cannot be a row
+/// is still a boundary between the rows on either side of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowFamily {
+    Instantiation,
+    ParameterDefinition,
+    EnumEntry,
+    Other,
+}
+
+/// The right edge of a semantic cell.
+///
+/// The value names the thing that follows the cell. Keeping the names semantic
+/// rather than numbering columns lets a row omit a later cell without shifting
+/// everything after it into the wrong column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum AlignPoint {
+    InstType,
+    InstName,
+    InstReset,
+    InstAddress,
+    InstStride,
+    InstAlign,
+    ParamName,
+    ParamDefault,
+    EnumValue,
+    TrailingComment,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Marker {
+    point: AlignPoint,
+    pos: usize,
+    /// Whether the ordinary formatter already put a separating space here.
+    base_space: bool,
+}
+
+#[derive(Debug)]
+struct Row {
+    family: RowFamily,
+    start: Option<usize>,
+    end: Option<usize>,
+    markers: Vec<Marker>,
+}
+
+#[derive(Debug, Default)]
+struct Scope {
+    rows: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingMarker {
+    row: usize,
+    point: AlignPoint,
+}
+
 pub(crate) struct Formatter<'a> {
     /// Kept so that [`Formatter::verbatim`] can slice out a node's original
     /// text by byte range. Once every kind has a rule this goes away.
@@ -125,6 +184,13 @@ pub(crate) struct Formatter<'a> {
     after_comment: bool,
     /// The line ending to write, taken from the input. See [`line_ending`].
     eol: &'static str,
+    /// Alignment metadata over `out`. Rules still emit in one pass; these byte
+    /// positions are the small IR retained until `finish` can see every row.
+    rows: Vec<Row>,
+    row_stack: Vec<usize>,
+    scopes: Vec<Scope>,
+    scope_stack: Vec<usize>,
+    pending_markers: Vec<PendingMarker>,
 }
 
 /// The line ending a file uses, judged by its first line break.
@@ -153,12 +219,18 @@ impl<'a> Formatter<'a> {
             saw_newline: false,
             after_comment: false,
             eol: line_ending(src),
+            rows: Vec::new(),
+            row_stack: Vec::new(),
+            scopes: vec![Scope::default()],
+            scope_stack: vec![0],
+            pending_markers: Vec::new(),
         }
     }
 
     /// Finishes the file: exactly one trailing newline, or nothing at all if
     /// there was no content.
     pub(crate) fn finish(mut self) -> String {
+        self.align();
         let trimmed = self.out.trim_end().len();
         self.out.truncate(trimmed);
         if !self.out.is_empty() {
@@ -239,6 +311,53 @@ impl<'a> Formatter<'a> {
     }
 
     //----------------------------------------------------------------------
+    // Alignment structure
+    //----------------------------------------------------------------------
+
+    /// Opens a list-local alignment scope. Rows in nested bodies and parameter
+    /// lists must never contribute widths to their enclosing list.
+    pub(crate) fn open_alignment_scope(&mut self) {
+        let id = self.scopes.len();
+        self.scopes.push(Scope::default());
+        self.scope_stack.push(id);
+    }
+
+    pub(crate) fn close_alignment_scope(&mut self) {
+        debug_assert!(self.scope_stack.len() > 1);
+        self.scope_stack.pop();
+    }
+
+    /// Begins one candidate row. Leading trivia is allowed to arrive after
+    /// this call: the row starts only when `token` sees its first real token.
+    pub(crate) fn begin_row(&mut self, family: RowFamily) {
+        let id = self.rows.len();
+        self.rows.push(Row {
+            family,
+            start: None,
+            end: None,
+            markers: Vec::new(),
+        });
+        let scope = *self.scope_stack.last().expect("root alignment scope");
+        self.scopes[scope].rows.push(id);
+        self.row_stack.push(id);
+    }
+
+    pub(crate) fn end_row(&mut self) {
+        let row = self.row_stack.pop().expect("end_row without begin_row");
+        // A marker with no following token cannot close a cell.
+        self.pending_markers.retain(|marker| marker.row != row);
+    }
+
+    /// Marks the pending gap as the right edge of the current semantic cell.
+    /// It is attached when the next significant token arrives, so comments in
+    /// leading trivia cannot steal a statement's first boundary.
+    pub(crate) fn align_before(&mut self, point: AlignPoint) {
+        if let Some(&row) = self.row_stack.last() {
+            self.pending_markers.push(PendingMarker { row, point });
+        }
+    }
+
+    //----------------------------------------------------------------------
     // Indentation
     //----------------------------------------------------------------------
 
@@ -261,9 +380,25 @@ impl<'a> Formatter<'a> {
             return;
         }
         match gap.sep {
-            Sep::None => {}
-            Sep::Space => self.out.push(' '),
-            Sep::Newline => self.newline(if gap.width == Width::Blank { 2 } else { 1 }),
+            Sep::None => self.materialize_markers(false),
+            Sep::Space => {
+                self.materialize_markers(true);
+                self.out.push(' ');
+            }
+            Sep::Newline => {
+                self.newline(if gap.width == Width::Blank { 2 } else { 1 });
+                self.materialize_markers(false);
+            }
+        }
+    }
+
+    fn materialize_markers(&mut self, base_space: bool) {
+        for pending in self.pending_markers.drain(..) {
+            self.rows[pending.row].markers.push(Marker {
+                point: pending.point,
+                pos: self.out.len(),
+                base_space,
+            });
         }
     }
 
@@ -297,7 +432,16 @@ impl<'a> Formatter<'a> {
     /// author wrote is not the formatter's business.
     pub(crate) fn token(&mut self, tok: &SyntaxToken) {
         debug_assert!(!tok.kind().is_trivia(), "trivia must go through trivia()");
-        self.write_raw(tok.text());
+        self.materialize();
+        let start = self.out.len();
+        for &row in &self.row_stack {
+            self.rows[row].start.get_or_insert(start);
+        }
+        self.out.push_str(tok.text());
+        let end = self.out.len();
+        for &row in &self.row_stack {
+            self.rows[row].end = Some(end);
+        }
         self.saw_newline = false;
         self.after_comment = false;
     }
@@ -346,6 +490,7 @@ impl<'a> Formatter<'a> {
                 // A comment that followed a newline in the source introduces
                 // what comes after it and belongs on its own line. One that did
                 // not is annotating the token it trails, and stays beside it.
+                let inline = !self.saw_newline;
                 if self.saw_newline {
                     self.request(Sep::Newline);
                 } else if kind == SyntaxKind::LINE_COMMENT {
@@ -361,6 +506,11 @@ impl<'a> Formatter<'a> {
                     self.pin(Sep::Space);
                 } else {
                     self.request(Sep::Space);
+                }
+                // A trailing comment belongs to the physical code line, even
+                // when rowan handed its trivia to the following CST node.
+                if inline {
+                    self.attach_trailing_comment();
                 }
                 self.write_raw(tok.text());
                 if kind == SyntaxKind::LINE_COMMENT {
@@ -433,6 +583,176 @@ impl<'a> Formatter<'a> {
         for tok in &trailing {
             self.trivia(tok);
         }
+    }
+
+    /// Adds the comment boundary to the most recent completed row when that
+    /// row still occupies the current physical line.
+    fn attach_trailing_comment(&mut self) {
+        let line_start = self.out.rfind('\n').map_or(0, |pos| pos + 1);
+        let Some((_, row)) = self
+            .rows
+            .iter_mut()
+            .enumerate()
+            .rev()
+            .find(|(_, row)| row.end.is_some_and(|end| end >= line_start))
+        else {
+            return;
+        };
+
+        // `trivia` settles an inline comment to a space before writing it.
+        row.markers.push(Marker {
+            point: AlignPoint::TrailingComment,
+            pos: self.out.len(),
+            base_space: true,
+        });
+    }
+
+    /// Computes padding from the completed rows and inserts it in one rebuild
+    /// of the output. Layout is already final at this point.
+    fn align(&mut self) {
+        let mut insertions: BTreeMap<usize, usize> = BTreeMap::new();
+
+        for scope in &self.scopes {
+            let mut run: Vec<usize> = Vec::new();
+            let mut previous: Option<usize> = None;
+
+            for &row_id in &scope.rows {
+                let row = &self.rows[row_id];
+                let eligible = row.family != RowFamily::Other
+                    && row.start.zip(row.end).is_some_and(|(start, end)| {
+                        !self.out[start..end].contains('\n') && !row.markers.is_empty()
+                    });
+
+                let continues = eligible
+                    && previous.is_some_and(|prev_id| {
+                        let prev = &self.rows[prev_id];
+                        prev.family == row.family && !self.breaks_run(prev, row)
+                    });
+
+                if !continues {
+                    self.align_run(&run, &mut insertions);
+                    run.clear();
+                }
+                if eligible {
+                    run.push(row_id);
+                    previous = Some(row_id);
+                } else {
+                    previous = None;
+                }
+            }
+            self.align_run(&run, &mut insertions);
+        }
+
+        if insertions.is_empty() {
+            return;
+        }
+
+        let mut aligned =
+            String::with_capacity(self.out.len() + insertions.values().copied().sum::<usize>());
+        let mut cursor = 0;
+        for (pos, count) in insertions {
+            aligned.push_str(&self.out[cursor..pos]);
+            aligned.extend(std::iter::repeat_n(' ', count));
+            cursor = pos;
+        }
+        aligned.push_str(&self.out[cursor..]);
+        self.out = aligned;
+    }
+
+    fn breaks_run(&self, previous: &Row, current: &Row) -> bool {
+        let (Some(end), Some(start)) = (previous.end, current.start) else {
+            return true;
+        };
+        let between = &self.out[end..start];
+        // Ignore the remainder of the previous code line and the indentation
+        // before the current one. A comment-only line between them is
+        // transparent; an actually empty interior line is a grouping boundary.
+        let mut physical = between.split('\n');
+        physical.next();
+        let mut interior: Vec<&str> = physical.collect();
+        interior.pop();
+        interior.iter().any(|line| line.trim().is_empty())
+            || crate::syntax::lex(between)
+                .iter()
+                .any(|(kind, _)| kind.is_directive())
+    }
+
+    fn align_run(&self, run: &[usize], insertions: &mut BTreeMap<usize, usize>) {
+        if run.len() < 2 {
+            return;
+        }
+
+        for point in [
+            AlignPoint::InstType,
+            AlignPoint::InstName,
+            AlignPoint::InstReset,
+            AlignPoint::InstAddress,
+            AlignPoint::InstStride,
+            AlignPoint::InstAlign,
+            AlignPoint::ParamName,
+            AlignPoint::ParamDefault,
+            AlignPoint::EnumValue,
+            AlignPoint::TrailingComment,
+        ] {
+            let mut group: Vec<(usize, Marker)> = Vec::new();
+            for &row_id in run {
+                let marker = self.rows[row_id]
+                    .markers
+                    .iter()
+                    .find(|marker| marker.point == point)
+                    .copied();
+                if let Some(marker) = marker {
+                    group.push((row_id, marker));
+                } else {
+                    self.align_column_group(&group, insertions);
+                    group.clear();
+                }
+            }
+            self.align_column_group(&group, insertions);
+        }
+    }
+
+    fn align_column_group(
+        &self,
+        group: &[(usize, Marker)],
+        insertions: &mut BTreeMap<usize, usize>,
+    ) {
+        if group.len() < 2 {
+            return;
+        }
+
+        let widths: Vec<usize> = group
+            .iter()
+            .map(|&(row_id, marker)| self.cell_width(&self.rows[row_id], marker))
+            .collect();
+        let maximum = widths.iter().copied().max().unwrap_or(0);
+        let separator = usize::from(maximum > 0);
+
+        for ((_, marker), width) in group.iter().zip(widths) {
+            let base = usize::from(marker.base_space);
+            let padding = maximum - width + separator.saturating_sub(base);
+            if padding > 0 {
+                insertions
+                    .entry(marker.pos)
+                    .and_modify(|old| *old = (*old).max(padding))
+                    .or_insert(padding);
+            }
+        }
+    }
+
+    fn cell_width(&self, row: &Row, marker: Marker) -> usize {
+        let start = row
+            .markers
+            .iter()
+            .filter(|candidate| candidate.pos < marker.pos)
+            .map(|candidate| candidate.pos)
+            .max()
+            .or(row.start)
+            .unwrap_or(marker.pos);
+        self.out[start..marker.pos]
+            .trim_start_matches([' ', '\t'])
+            .chars()
+            .count()
     }
 }
 

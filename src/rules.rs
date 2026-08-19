@@ -33,7 +33,7 @@
 //! statement being the first in a body, and so wanting a newline in front of
 //! `reg`, is not that rule's problem.
 
-use crate::formatter::{Formatter, Sep};
+use crate::formatter::{AlignPoint, Formatter, RowFamily, Sep};
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use rowan::NodeOrToken;
 
@@ -53,7 +53,6 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
         | COMPONENT_ANON_DEF
         | UDP_DEF
         | ENUM_DEF
-        | ENUM_ENTRY
         | STRUCT_DEF
         | CONSTRAINT_DEF
         | CONSTRAINT_NAMED_DEF
@@ -66,9 +65,6 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
         | PROP_KEYWORD
         | PROP_MOD
         | ENUM_PROP_ASSIGN
-        | EXPLICIT_COMPONENT_INST
-        | COMPONENT_INSTS
-        | COMPONENT_INST
         | COMPONENT_INST_ALIAS
         | COMPONENT_TYPE
         | COMPONENT_INST_TYPE
@@ -89,7 +85,6 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
         // sentence: `a + b`, `a ? b : c`, `longint unsigned WIDTH = 32`.
         | BINARY_EXPR
         | TERNARY_EXPR
-        | PARAM_DEF_ELEM
         // Constraints: `this > 0`, `this inside myEnum`, `a = 1`.
         | CONSTR_RELATIONAL
         | CONSTR_PROP_ASSIGN
@@ -122,6 +117,13 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
 
         STRUCT_KV => struct_kv(f, node),
         CONSTR_INSIDE_VALUES => inside_values(f, node),
+        EXPLICIT_COMPONENT_INST => explicit_component_inst(f, node),
+        PARAM_DEF_ELEM => param_def_elem(f, node),
+        ENUM_ENTRY => enum_entry(f, node),
+
+        // These are normally reached through `explicit_component_inst`, but
+        // retain sensible standalone rules for hand-built/error-tolerant CSTs.
+        COMPONENT_INSTS | COMPONENT_INST => spaced(f, node),
 
         // Comma-separated lists that are part of an expression, and so never
         // break however many elements they hold. A macro call belongs here
@@ -167,8 +169,8 @@ fn source_file(f: &mut Formatter, node: &SyntaxNode) {
 ///
 /// The style guide asks for the opening brace on the line of the statement that
 /// owns it, the contents indented one level, and the closing brace alone on its
-/// line. There is no width to measure and no alternative to weigh, which is the
-/// whole reason this formatter needs no document IR.
+/// line. There is no width to measure and no alternative to weigh; the
+/// alignment IR records only padding boundaries after this layout is settled.
 ///
 /// Two exceptions, both from the style guide: an empty body has nothing to
 /// indent, and `sw`/`hw` may share a line. See [`shares_line_with`].
@@ -199,8 +201,10 @@ fn braced_body(f: &mut Formatter, node: &SyntaxNode) {
                 f.token(&tok);
                 f.indent();
                 f.settle_width();
+                f.open_alignment_scope();
             }
             NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::R_BRACE => {
+                f.close_alignment_scope();
                 f.dedent();
                 // Pinned, not requested: a blank line in front of `}` is an
                 // editing artefact rather than a grouping to preserve.
@@ -217,8 +221,179 @@ fn braced_body(f: &mut Formatter, node: &SyntaxNode) {
                 } else {
                     Sep::Newline
                 });
+                f.begin_row(row_family(item.kind()));
                 format_node(f, &item);
+                f.end_row();
                 prev = Some(item);
+            }
+        }
+    }
+}
+
+fn row_family(kind: SyntaxKind) -> RowFamily {
+    match kind {
+        SyntaxKind::EXPLICIT_COMPONENT_INST => RowFamily::Instantiation,
+        SyntaxKind::ENUM_ENTRY => RowFamily::EnumEntry,
+        _ => RowFamily::Other,
+    }
+}
+
+/// An explicit component instantiation, divided into the semantic cells which
+/// are meaningful across neighbouring statements.
+fn explicit_component_inst(f: &mut Formatter, node: &SyntaxNode) {
+    let instances = node
+        .descendants()
+        .filter(|child| child.kind() == SyntaxKind::COMPONENT_INST)
+        .count();
+    let parameterized = node
+        .descendants()
+        .any(|child| child.kind() == SyntaxKind::PARAM_INST);
+    // A parameter list introduces another cell structure in the middle of the
+    // statement. Treat the whole statement as a boundary rather than making a
+    // neighbouring simple instantiation line up across it.
+    if instances != 1 || parameterized {
+        spaced(f, node);
+        return;
+    }
+
+    let mut first = true;
+    let mut saw_type = false;
+    for child in node.children_with_tokens() {
+        match child {
+            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
+            NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::SEMICOLON => f.token(&tok),
+            NodeOrToken::Token(tok) => {
+                if !saw_type {
+                    if !first {
+                        f.request(Sep::Space);
+                    }
+                    f.align_before(AlignPoint::InstType);
+                    f.token(&tok);
+                    saw_type = true;
+                } else {
+                    if !first {
+                        f.request(Sep::Space);
+                    }
+                    f.token(&tok);
+                }
+                first = false;
+            }
+            NodeOrToken::Node(child) if child.kind() == SyntaxKind::COMPONENT_INSTS => {
+                if !first {
+                    f.request(Sep::Space);
+                }
+                component_insts_aligned(f, &child);
+                first = false;
+            }
+            NodeOrToken::Node(child) => {
+                if !first {
+                    f.request(Sep::Space);
+                }
+                format_node(f, &child);
+                first = false;
+            }
+        }
+    }
+}
+
+fn component_insts_aligned(f: &mut Formatter, node: &SyntaxNode) {
+    let mut saw_part = false;
+    for child in node.children_with_tokens() {
+        match child {
+            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
+            NodeOrToken::Token(tok) => f.token(&tok),
+            NodeOrToken::Node(child) if child.kind() == SyntaxKind::COMPONENT_INST => {
+                if saw_part {
+                    f.request(Sep::Space);
+                }
+                f.align_before(AlignPoint::InstName);
+                component_inst_aligned(f, &child);
+                saw_part = true;
+            }
+            NodeOrToken::Node(child) => {
+                format_node(f, &child);
+                saw_part = true;
+            }
+        }
+    }
+}
+
+fn component_inst_aligned(f: &mut Formatter, node: &SyntaxNode) {
+    for child in node.children_with_tokens() {
+        match child {
+            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
+            NodeOrToken::Token(tok) => f.token(&tok),
+            NodeOrToken::Node(child) => {
+                let point = match child.kind() {
+                    SyntaxKind::FIELD_INST_RESET => Some(AlignPoint::InstReset),
+                    SyntaxKind::INST_ADDR_FIXED => Some(AlignPoint::InstAddress),
+                    SyntaxKind::INST_ADDR_STRIDE => Some(AlignPoint::InstStride),
+                    SyntaxKind::INST_ADDR_ALIGN => Some(AlignPoint::InstAlign),
+                    _ => None,
+                };
+                if let Some(point) = point {
+                    f.request(Sep::Space);
+                    f.align_before(point);
+                }
+                format_node(f, &child);
+            }
+        }
+    }
+}
+
+fn param_def_elem(f: &mut Formatter, node: &SyntaxNode) {
+    let mut first = true;
+    let mut saw_type = false;
+    for child in node.children_with_tokens() {
+        match child {
+            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
+            NodeOrToken::Token(tok) => {
+                if !first && !is_terminator(&tok) {
+                    f.request(Sep::Space);
+                }
+                if saw_type && tok.kind().is_ident_like() {
+                    f.align_before(AlignPoint::ParamName);
+                    saw_type = false;
+                } else if tok.kind() == SyntaxKind::ASSIGN {
+                    f.align_before(AlignPoint::ParamDefault);
+                }
+                f.token(&tok);
+                first = false;
+            }
+            NodeOrToken::Node(child) => {
+                if !first && !is_suffix(child.kind()) {
+                    f.request(Sep::Space);
+                }
+                let is_type = child.kind() == SyntaxKind::DATA_TYPE;
+                format_node(f, &child);
+                saw_type |= is_type;
+                first = false;
+            }
+        }
+    }
+}
+
+fn enum_entry(f: &mut Formatter, node: &SyntaxNode) {
+    let mut first = true;
+    for child in node.children_with_tokens() {
+        match child {
+            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
+            NodeOrToken::Token(tok) => {
+                if !first && !is_terminator(&tok) {
+                    f.request(Sep::Space);
+                }
+                if tok.kind() == SyntaxKind::ASSIGN {
+                    f.align_before(AlignPoint::EnumValue);
+                }
+                f.token(&tok);
+                first = false;
+            }
+            NodeOrToken::Node(child) => {
+                if !first {
+                    f.request(Sep::Space);
+                }
+                format_node(f, &child);
+                first = false;
             }
         }
     }
@@ -333,10 +508,8 @@ fn inside_values(f: &mut Formatter, node: &SyntaxNode) {
 ///
 /// This enum is the entire layout question in this formatter, and
 /// [`param_list_layout`] is the only place it is answered. Both are structural:
-/// nothing here measures a rendered width, which is why the rules can write
-/// directly into the output instead of building a document to be measured
-/// later. If a construct ever does need width, this is the one function to
-/// change -- it can render flat into a scratch buffer and count.
+/// nothing here measures a rendered width. The small alignment IR is consulted
+/// only after this choice and every other line break is final.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Layout {
     Flat,
@@ -465,8 +638,10 @@ fn broken_list(f: &mut Formatter, node: &SyntaxNode) {
                 f.token(&tok);
                 f.indent();
                 f.settle_width();
+                f.open_alignment_scope();
             }
             NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::R_PAREN => {
+                f.close_alignment_scope();
                 f.dedent();
                 f.pin(Sep::Newline);
                 f.token(&tok);
@@ -475,7 +650,13 @@ fn broken_list(f: &mut Formatter, node: &SyntaxNode) {
             NodeOrToken::Token(tok) => f.token(&tok),
             NodeOrToken::Node(element) => {
                 f.request(Sep::Newline);
+                f.begin_row(if element.kind() == SyntaxKind::PARAM_DEF_ELEM {
+                    RowFamily::ParameterDefinition
+                } else {
+                    RowFamily::Other
+                });
                 format_node(f, &element);
+                f.end_row();
             }
         }
     }
