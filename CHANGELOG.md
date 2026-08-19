@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-08-19
 
 ### Added
 
@@ -65,6 +65,7 @@ First release.
   lossless rowan CST underneath. The CLI dependencies sit behind the default
   `cli` feature, so library users can turn them off.
 
-[Unreleased]: https://github.com/fischeti/rdlfmt/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/fischeti/rdlfmt/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/fischeti/rdlfmt/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/fischeti/rdlfmt/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/fischeti/rdlfmt/releases/tag/v0.1.0

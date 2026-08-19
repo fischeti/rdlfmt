@@ -1,6 +1,6 @@
 [package]
 name = "rdlfmt"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A formatter for SystemRDL"
@@ -10,9 +10,7 @@ license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["systemrdl", "formatter", "eda", "registers", "csr"]
 categories = ["development-tools", "command-line-utilities"]
-# The docs site is built and deployed from the repository, and the spec PDF
-# that sits beside it is Accellera's, not ours to redistribute.
-exclude = ["docs/", "sample.cst"]
+exclude = ["docs/"]
 
 [features]
 default = ["cli"]
