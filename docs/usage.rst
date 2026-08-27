@@ -127,7 +127,7 @@ so contributors need nothing on their ``PATH``:
             name: rdlfmt
             entry: rdlfmt
             language: python
-            additional_dependencies: [rdlfmt]
+            additional_dependencies: [rdlfmt==|release|]
             types: [file]
             files: \.rdl$
 

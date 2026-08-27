@@ -39,3 +39,15 @@ html_theme_options = {
     "use_issues_button": True,
     "home_page_in_toc": True,
 }
+
+
+# Sphinx expands ``|release|`` in prose, but not inside a ``code-block`` --
+# literal text is deliberately left alone. The pinned version in the
+# `pre-commit` recipe has to live inside one and still track Cargo.toml, so it
+# is substituted into the source text before docutils parses it.
+def _substitute_release(_app, _docname, source):
+    source[0] = source[0].replace("|release|", release)
+
+
+def setup(app):
+    app.connect("source-read", _substitute_release)
