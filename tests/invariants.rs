@@ -1069,6 +1069,34 @@ fn a_leading_comment_does_not_end_a_run() {
     );
 }
 
+/// Regression: a row whose first token was separated from what precedes it by
+/// a *space* rather than a line break used to start one byte past its own first
+/// alignment marker, and measuring that opening cell sliced the output
+/// backwards. The panic needed a run of two, since a lone row is never measured.
+#[test]
+fn an_inline_block_comment_does_not_panic_a_run() {
+    let out = check("addrmap a {\n    /* x */ r ctrl @ 0x0;\n    r status @ 0x4;\n};\n");
+    assert_eq!(
+        out,
+        "addrmap a {\n    /* x */ r ctrl @ 0x0;\n    r status @ 0x4;\n};\n"
+    );
+}
+
+/// Columns come out of cell *widths*, which only line up because every row in a
+/// run starts at the same one. A row sharing its line with a comment starts
+/// further right, so it stays out -- and, like any other row that cannot align,
+/// it is a boundary for the ones around it.
+#[test]
+fn a_row_behind_an_inline_comment_breaks_the_run() {
+    let out = check(
+        "addrmap a {\n    r ctrl @ 0x0;\n    /* x */ r status @ 0x4;\n    r cc @ 0x8;\n    r dddd @ 0xC;\n};\n",
+    );
+    assert_eq!(
+        out,
+        "addrmap a {\n    r ctrl @ 0x0;\n    /* x */ r status @ 0x4;\n    r cc   @ 0x8;\n    r dddd @ 0xC;\n};\n"
+    );
+}
+
 #[test]
 fn a_comment_only_line_inside_a_run_is_transparent() {
     let out = check(

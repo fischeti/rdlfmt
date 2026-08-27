@@ -394,9 +394,12 @@ impl<'a> Formatter<'a> {
 
     fn materialize_markers(&mut self, base_space: bool) {
         for pending in self.pending_markers.drain(..) {
-            self.rows[pending.row].markers.push(Marker {
+            let pos = self.out.len();
+            let row = &mut self.rows[pending.row];
+            row.start.get_or_insert(pos);
+            row.markers.push(Marker {
                 point: pending.point,
-                pos: self.out.len(),
+                pos,
                 base_space,
             });
         }
@@ -626,7 +629,9 @@ impl<'a> Formatter<'a> {
                 let row = &self.rows[row_id];
                 let eligible = row.family != RowFamily::Other
                     && row.start.zip(row.end).is_some_and(|(start, end)| {
-                        !self.out[start..end].contains('\n') && !row.markers.is_empty()
+                        !self.out[start..end].contains('\n')
+                            && !row.markers.is_empty()
+                            && self.starts_its_line(start)
                     });
 
                 let continues = eligible
@@ -663,6 +668,12 @@ impl<'a> Formatter<'a> {
         }
         aligned.push_str(&self.out[cursor..]);
         self.out = aligned;
+    }
+
+    /// Whether nothing but indentation precedes `start` on its physical line.
+    fn starts_its_line(&self, start: usize) -> bool {
+        let line_start = self.out[..start].rfind('\n').map_or(0, |pos| pos + 1);
+        self.out[line_start..start].trim().is_empty()
     }
 
     fn breaks_run(&self, previous: &Row, current: &Row) -> bool {

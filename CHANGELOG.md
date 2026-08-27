@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   indented with the code around them, matching the lowRISC SystemVerilog style
   guide.
 
+### Fixed
+
+- A block comment sharing a line with an instantiation no longer panics the
+  formatter.
+
 ## [0.2.0] - 2026-08-19
 
 ### Added
