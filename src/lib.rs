@@ -40,8 +40,9 @@
 //! point of treating even the conditionals as trivia: a `` `ifdef `` whose
 //! branches hand a brace back and forth leaves the braces unbalanced, and so is
 //! refused by the same check as any other input the parser could not follow.
-//! Everything else formats like a comment -- its own line, indented with the
-//! code around it, payload untouched. See the module docs in
+//! Everything else formats like a comment -- its own line, payload untouched --
+//! except that a branching directive is left-aligned rather than indented with
+//! the code around it, having no place in the brace hierarchy. See the docs in
 //! [`crate::syntax::parser`] for why ignoring a conditional cannot corrupt
 //! the file.
 

@@ -109,8 +109,8 @@ addrmap exprs {
 };
 
 // A macro reference is an atom: it may stand for a value, or for a name, since
-// what it expands to is unknowable without the definitions. A directive inside
-// a body is indented with the code around it.
+// what it expands to is unknowable without the definitions. A brace-neutral
+// directive is a member of the body it appears in, and is indented with it.
 addrmap macros {
     `include "regs.rdl"
 
@@ -122,15 +122,14 @@ addrmap macros {
     `MY_REG_T r2;
 };
 
-// A conditional is laid out like any other directive: on its own line, at the
-// indentation of the code around it, and with both branches kept, since which
-// one survives depends on definitions that live in another file.
+// A branching directive is left-aligned at every depth, and the code it guards
+// is indented as though it were absent. Both branches are kept.
 `ifndef MY_MAP_DEFINED
 addrmap conditional {
-    `ifdef WITH_STATUS
+`ifdef WITH_STATUS
     my_reg status @ 0x0;
-    `else
+`else
     my_reg reserved @ 0x0;
-    `endif
+`endif
 };
 `endif

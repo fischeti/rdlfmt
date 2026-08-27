@@ -709,9 +709,9 @@ fn hand_wrapped_statement_is_pulled_back_onto_one_line() {
 }
 
 //--------------------------------------------------------------------------
-// Preprocessor directives. The brace-neutral ones are trivia, so what is
-// being checked here is placement: a directive owns its line, keeps its
-// payload byte for byte, and is indented with the code around it.
+// Preprocessor directives. A directive owns its line and keeps its payload
+// byte for byte; a `define` or `include` is indented with its block, and a
+// branching one is left-aligned.
 //--------------------------------------------------------------------------
 
 #[test]
@@ -795,12 +795,69 @@ fn a_macro_reference_may_stand_for_a_name() {
 }
 
 #[test]
-fn a_conditional_around_whole_statements_is_laid_out_like_any_directive() {
-    let out = check("addrmap top {\n`ifdef FOO\nmy_reg r1;\n`else\nmy_reg r2;\n`endif\n};\n");
+fn a_conditional_is_left_aligned_inside_a_body() {
+    // The guarded statements are indented as though the directives were not
+    // there, which is what the parser sees anyway.
+    let out =
+        check("addrmap top {\n    `ifdef FOO\n    my_reg r1;\n`else\nmy_reg r2;\n`endif\n};\n");
     assert_eq!(
         out,
-        "addrmap top {\n    `ifdef FOO\n    my_reg r1;\n    `else\n    my_reg r2;\n    `endif\n};\n"
+        "addrmap top {\n`ifdef FOO\n    my_reg r1;\n`else\n    my_reg r2;\n`endif\n};\n"
     );
+}
+
+#[test]
+fn a_conditional_is_left_aligned_however_deep_it_sits() {
+    // Deep nesting is where it matters: an `endif` is easier to find at the
+    // margin than buried in the body its region passes through.
+    let out = check(
+        "addrmap top {\n    reg {\n`ifdef WIDE\nfield {} data[31:0];\n`else\nfield {} data[15:0];\n`endif\n    } r;\n};\n",
+    );
+    assert_eq!(
+        out,
+        "addrmap top {\n    reg {\n`ifdef WIDE\n        field {} data[31:0];\n`else\n        field {} data[15:0];\n`endif\n    } r;\n};\n"
+    );
+}
+
+#[test]
+fn nested_conditionals_are_all_at_the_margin() {
+    // Nothing pairs an `endif` with its `ifdef`, so there is no directive
+    // depth to indent by even when one region sits inside another.
+    let out = check(
+        "`ifndef DEFINED\naddrmap top {\n`ifdef WITH_STATUS\nmy_reg status;\n`endif\n};\n`endif\n",
+    );
+    assert_eq!(
+        out,
+        "`ifndef DEFINED\naddrmap top {\n`ifdef WITH_STATUS\n    my_reg status;\n`endif\n};\n`endif\n"
+    );
+}
+
+#[test]
+fn a_conditional_and_an_include_beside_it_part_ways() {
+    // The two kinds side by side: the `include` is a member of the body and
+    // indented with it, the `ifdef` is not.
+    let out = check("addrmap top {\n`ifdef FOO\n`include \"regs.rdl\"\n`endif\n};\n");
+    assert_eq!(
+        out,
+        "addrmap top {\n`ifdef FOO\n    `include \"regs.rdl\"\n`endif\n};\n"
+    );
+}
+
+#[test]
+fn a_conditional_in_a_parameter_list_is_left_aligned_too() {
+    // A parameter list indents like a body, and the rule does not change:
+    // what a directive sits inside never affects its column.
+    let out = check("reg r #(\n`ifdef WIDE\nlongint unsigned W = 32\n`endif\n) {};\n");
+    assert_eq!(
+        out,
+        "reg r #(\n`ifdef WIDE\n    longint unsigned W = 32\n`endif\n) {};\n"
+    );
+}
+
+#[test]
+fn a_conditional_at_the_top_level_is_unmoved() {
+    let out = check("`ifdef FOO\naddrmap top {};\n`endif\n");
+    assert_eq!(out, "`ifdef FOO\naddrmap top {};\n`endif\n");
 }
 
 #[test]

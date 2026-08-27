@@ -474,11 +474,17 @@ impl<'a> Formatter<'a> {
                 // lets a blank line the author left in front of an `include`
                 // block survive.
                 self.request(Sep::Newline);
+                // A branching directive is always aligned with zero indentation.
+                let saved_indent = self.indent;
+                if kind == SyntaxKind::COND_DIRECTIVE {
+                    self.indent = 0;
+                }
                 // A directive runs to the end of its line, so any spaces at
                 // the end of it are outside the macro body in every sense that
                 // matters -- and keeping them would leave the one thing this
                 // formatter promises never to emit.
                 self.write_raw(tok.text().trim_end());
+                self.indent = saved_indent;
                 // Unconditional, for the same reason as a line comment's:
                 // whatever follows a directive *must* start a new line, and
                 // getting this wrong swallows code into a macro body.
