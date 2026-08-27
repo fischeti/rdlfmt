@@ -1092,3 +1092,138 @@ fn alignment_is_a_fixed_point() {
     let twice = check(&once);
     assert_eq!(once, twice);
 }
+
+//--------------------------------------------------------------------------
+// Suppression. `check` asserts the token stream, the comments and idempotency
+// for each of these, so what the assertions below add is only the layout.
+//--------------------------------------------------------------------------
+
+/// The point of the escape hatch: whatever the author aligned by hand inside
+/// the region survives, spacing and all.
+#[test]
+fn off_reproduces_statements_verbatim() {
+    let out = check("addrmap a {\n    // rdlfmt: off\n    r ctrl   @ 0x0;\n    r s @ 0x4;\n};\n");
+    assert_eq!(
+        out,
+        "addrmap a {\n    // rdlfmt: off\n    r ctrl   @ 0x0;\n    r s @ 0x4;\n};\n"
+    );
+}
+
+/// `on` restores the statement it precedes rather than the one after it, which
+/// is what makes a region read as the lines between the two markers.
+#[test]
+fn on_resumes_formatting() {
+    let out = check(
+        "addrmap a {\n    // rdlfmt: off\n    r ctrl   @ 0x0;\n    // rdlfmt: on\n    r s @ 0x4;\n    r long @ 0x8;\n};\n",
+    );
+    assert_eq!(
+        out,
+        "addrmap a {\n    // rdlfmt: off\n    r ctrl   @ 0x0;\n    // rdlfmt: on\n    r s    @ 0x4;\n    r long @ 0x8;\n};\n"
+    );
+}
+
+/// A column measured across a suppressed region would be computed from text the
+/// author asked to be left alone, so the region ends the run on either side of
+/// it. `ctrl` and `s` are one width apart and still do not line up.
+#[test]
+fn a_region_breaks_an_aligned_run() {
+    let out = check(
+        "addrmap a {\n    r ctrl @ 0x0;\n    // rdlfmt: off\n    r xx  @ 0x4;\n    // rdlfmt: on\n    r s @ 0x8;\n};\n",
+    );
+    assert_eq!(
+        out,
+        "addrmap a {\n    r ctrl @ 0x0;\n    // rdlfmt: off\n    r xx  @ 0x4;\n    // rdlfmt: on\n    r s @ 0x8;\n};\n"
+    );
+}
+
+#[test]
+fn skip_covers_exactly_one_statement() {
+    let out = check(
+        "addrmap a {\n    // rdlfmt: skip\n    r ctrl   @ 0x0;\n    r s @ 0x4;\n    r long @ 0x8;\n};\n",
+    );
+    assert_eq!(
+        out,
+        "addrmap a {\n    // rdlfmt: skip\n    r ctrl   @ 0x0;\n    r s    @ 0x4;\n    r long @ 0x8;\n};\n"
+    );
+}
+
+/// A suppressed statement is written whole rather than recursed into, so a
+/// braced body inside one keeps its interior exactly as typed.
+#[test]
+fn a_region_covers_a_nested_body_whole() {
+    let out = check(
+        "addrmap a {\n    // rdlfmt: off\n    reg {\n  field {sw=rw;} f;\n    }   messy @ 0x0;\n};\n",
+    );
+    assert_eq!(
+        out,
+        "addrmap a {\n    // rdlfmt: off\n    reg {\n  field {sw=rw;} f;\n    }   messy @ 0x0;\n};\n"
+    );
+}
+
+/// A region is bounded by the body that opened it. Without that, an unclosed
+/// `off` would swallow the rest of the file from however deep it was written.
+#[test]
+fn a_region_does_not_escape_its_body() {
+    let out = check(
+        "addrmap a {\n    reg {\n        // rdlfmt: off\n        field {} x;\n    } r;\n    r s @ 0x0;\n    r long @ 0x4;\n};\n",
+    );
+    assert_eq!(
+        out,
+        "addrmap a {\n    reg {\n        // rdlfmt: off\n        field {} x;\n    } r;\n    r s    @ 0x0;\n    r long @ 0x4;\n};\n"
+    );
+}
+
+/// An `off` with no `on` after it ends with the closing brace, so it needs no
+/// diagnostic and cannot unbalance anything.
+#[test]
+fn an_unclosed_region_ends_with_the_body() {
+    check("addrmap a {\n    // rdlfmt: off\n    r ctrl   @ 0x0;\n};\n");
+}
+
+/// Markers work between top-level items too, where the enclosing scope is the
+/// file rather than a body.
+#[test]
+fn a_region_works_at_file_scope() {
+    let out = check("// rdlfmt: off\naddrmap a {\n      r x @ 0x0;\n};\n");
+    assert_eq!(out, "// rdlfmt: off\naddrmap a {\n      r x @ 0x0;\n};\n");
+}
+
+/// A marker trailing a statement belongs to *that* statement, not the next one,
+/// so it never governs anything. Pinned here because it is the documented
+/// limitation: the alignment below proves it was inert.
+#[test]
+fn a_trailing_marker_is_not_a_directive() {
+    let out = check("addrmap a {\n    r ctrl @ 0x0; // rdlfmt: off\n    r s @ 0x4;\n};\n");
+    assert_eq!(
+        out,
+        "addrmap a {\n    r ctrl @ 0x0; // rdlfmt: off\n    r s    @ 0x4;\n};\n"
+    );
+}
+
+/// Prose that merely mentions the formatter is not a directive. Matching
+/// loosely would let a comment start suppressing code years after it was
+/// written as an aside.
+#[test]
+fn a_comment_mentioning_the_marker_is_prose() {
+    let out = check(
+        "addrmap a {\n    // rdlfmt: off would help here\n    r ctrl @ 0x0;\n    r s @ 0x4;\n};\n",
+    );
+    assert_eq!(
+        out,
+        "addrmap a {\n    // rdlfmt: off would help here\n    r ctrl @ 0x0;\n    r s    @ 0x4;\n};\n"
+    );
+}
+
+/// A marker is a line comment only, which is what makes "on a line of its own"
+/// true by construction rather than by rule: a `//` comment that leads a
+/// statement must have begun a line. A block comment can sit anywhere, so
+/// honouring one would admit `/* rdlfmt: off */ r ctrl @ 0x0;` -- a marker in
+/// the middle of a line, governing the statement beside it.
+#[test]
+fn a_block_comment_is_not_a_marker() {
+    let out = check("addrmap a {\n    /* rdlfmt: off */\n    r ctrl @ 0x0;\n    r s @ 0x4;\n};\n");
+    assert_eq!(
+        out,
+        "addrmap a {\n    /* rdlfmt: off */\n    r ctrl @ 0x0;\n    r s    @ 0x4;\n};\n"
+    );
+}

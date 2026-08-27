@@ -133,3 +133,23 @@ addrmap conditional {
 `endif
 };
 `endif
+
+// The escape hatch. A marker on its own line suppresses formatting for the
+// statements it governs, which are reproduced byte for byte from the first
+// token on -- so the hand-built column below survives, while the statements
+// still sit at the depth they belong to.
+addrmap suppressed {
+    // rdlfmt: off
+    my_reg  fifo_head     @ 0x00;
+    my_reg  fifo_tail     @ 0x04;
+    // rdlfmt: on
+
+    // A region ends the aligned run on either side of it, so these two are
+    // measured on their own.
+    my_reg head @ 0x08;
+    my_reg tail @ 0x0c;
+
+    // `skip` governs exactly one statement.
+    // rdlfmt: skip
+    my_reg   lone   @ 0x10;
+};

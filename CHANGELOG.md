@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- An escape hatch. A `// rdlfmt: off` comment on a line of its own suppresses
+  formatting for the statements that follow it, until a `// rdlfmt: on` or the
+  end of the enclosing body; `// rdlfmt: skip` covers the single statement
+  below it.
+
 ### Changed
 
 - Branching preprocessor directives (`` `ifdef ``, `` `ifndef ``, `` `elsif ``,
