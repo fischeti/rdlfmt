@@ -767,7 +767,7 @@ impl<'a> Formatter<'a> {
 /// Leading trivia sits on the leftmost leaf, however deep that is -- the block
 /// comment before `reg my_reg` lands three levels down, inside `COMPONENT_TYPE`
 /// -- so this walks the token stream rather than the node's direct children.
-fn leading_trivia(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
+pub(crate) fn leading_trivia(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
     let end = node.text_range().end();
     std::iter::successors(node.first_token(), |tok: &SyntaxToken| tok.next_token())
         .take_while(move |tok| tok.text_range().end() <= end && tok.kind().is_trivia())

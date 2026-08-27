@@ -147,6 +147,8 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
 /// lines count for anything: one arrives later, as the item's own leading
 /// trivia, and widens the break this asked for.
 fn source_file(f: &mut Formatter, node: &SyntaxNode) {
+    let mut region = false;
+
     for child in node.children_with_tokens() {
         match child {
             NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
@@ -159,7 +161,11 @@ fn source_file(f: &mut Formatter, node: &SyntaxNode) {
             }
             NodeOrToken::Node(item) => {
                 f.request(Sep::Newline);
-                format_node(f, &item);
+                if is_suppressed(&mut region, &item) {
+                    f.verbatim(&item);
+                } else {
+                    format_node(f, &item);
+                }
             }
         }
     }
@@ -194,6 +200,7 @@ fn braced_body(f: &mut Formatter, node: &SyntaxNode) {
     }
 
     let mut prev: Option<SyntaxNode> = None;
+    let mut region = false;
     for child in node.children_with_tokens() {
         match child {
             NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
@@ -216,13 +223,22 @@ fn braced_body(f: &mut Formatter, node: &SyntaxNode) {
                 f.token(&tok);
             }
             NodeOrToken::Node(item) => {
+                let verbatim = is_suppressed(&mut region, &item);
                 f.request(if shares_line_with(&item, prev.as_ref()) {
                     Sep::Space
                 } else {
                     Sep::Newline
                 });
-                f.begin_row(row_family(item.kind()));
-                format_node(f, &item);
+                f.begin_row(if verbatim {
+                    RowFamily::Other
+                } else {
+                    row_family(item.kind())
+                });
+                if verbatim {
+                    f.verbatim(&item);
+                } else {
+                    format_node(f, &item);
+                }
                 f.end_row();
                 prev = Some(item);
             }
@@ -662,6 +678,54 @@ fn broken_list(f: &mut Formatter, node: &SyntaxNode) {
     }
 
     f.allow_blank_lines(outer);
+}
+
+/// What a `rdlfmt:` marker asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Marker {
+    /// Reproduce statements verbatim from here to the end of the body.
+    Off,
+    /// Resume formatting.
+    On,
+    /// Reproduce just the statement that follows.
+    Skip,
+}
+
+/// The marker a statement's leading trivia carries, if any.
+fn suppression(item: &SyntaxNode) -> Option<Marker> {
+    crate::formatter::leading_trivia(item)
+        .filter(|tok| tok.kind().is_comment())
+        .filter_map(|tok| marker(tok.text()))
+        .last()
+}
+
+/// Parses one comment's text as a marker.
+fn marker(text: &str) -> Option<Marker> {
+    match text
+        .strip_prefix("//")?
+        .trim()
+        .strip_prefix("rdlfmt:")?
+        .trim()
+    {
+        "off" => Some(Marker::Off),
+        "on" => Some(Marker::On),
+        "skip" => Some(Marker::Skip),
+        _ => None,
+    }
+}
+
+/// Whether `item` is reproduced verbatim, applying any marker it carries to
+/// `region` -- the suppression state of the statement sequence it belongs to.
+fn is_suppressed(region: &mut bool, item: &SyntaxNode) -> bool {
+    match suppression(item) {
+        Some(Marker::Off) => *region = true,
+        Some(Marker::On) => *region = false,
+        // Governs one statement without disturbing the region around it, so a
+        // `skip` inside an `off` block is merely redundant.
+        Some(Marker::Skip) => return true,
+        None => {}
+    }
+    *region
 }
 
 fn is_terminator(tok: &SyntaxToken) -> bool {

@@ -107,6 +107,13 @@ impl std::error::Error for FormatError {}
 /// ending arguments, not by relocating them into a config file. Indentation is
 /// four spaces, which is what the PeakRDL style guide asks for.
 ///
+/// A `// rdlfmt: off` comment suppresses formatting for the statements that
+/// follow it, until a `// rdlfmt: on` or the end of the enclosing body; a
+/// `// rdlfmt: skip` covers the single statement below it. That is an opt-out
+/// for one passage rather than a setting -- it travels with the code it
+/// applies to, and says only that a passage is already the way its author
+/// wants it.
+///
 /// The output is verified before it is returned: see `verify`. A caller that
 /// gets `Ok` has a guarantee, not just a hope, that only whitespace moved.
 ///
