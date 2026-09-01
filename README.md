@@ -51,16 +51,15 @@ A prebuilt binary, needing no toolchain of any kind:
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/fischeti/rdlfmt/releases/latest/download/rdlfmt-installer.sh | sh
 ```
 
-Or, if you already manage `peakrdl` with a Python tool:
+Or from PyPI:
 
 ```bash
 uv tool install rdlfmt
 ```
 
-Installed alongside [PeakRDL](https://peakrdl.readthedocs.io), the same wheel
-registers a `peakrdl fmt` subcommand. `cargo install rdlfmt` works too. See
+`cargo install rdlfmt` works too. See
 [Installation](https://fischeti.github.io/rdlfmt/installation.html) for
-Windows, PyPI and building from source.
+Windows and building from source.
 
 ## Usage
 

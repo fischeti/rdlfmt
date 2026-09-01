@@ -28,8 +28,8 @@ place one yourself.
 From PyPI
 ---------
 
-Convenient if you already manage ``peakrdl`` this way. The package is the Rust
-binary in a wheel, not a Python program, so it pulls in nothing else:
+The package is the Rust binary in a wheel, not a Python program, so it pulls
+in nothing else:
 
 .. code-block:: bash
 
@@ -64,29 +64,3 @@ Rust 1.88 or newer:
     git clone https://github.com/fischeti/rdlfmt
     cd rdlfmt
     cargo build --release
-
-
-.. _peakrdl-plugin:
-
-As a PeakRDL plugin
--------------------
-
-Installed into the same environment as
-`PeakRDL <https://peakrdl.readthedocs.io>`_, the wheel also registers a
-``peakrdl fmt`` subcommand:
-
-.. code-block:: bash
-
-    uv tool install peakrdl-cli --with rdlfmt
-
-.. code-block:: bash
-
-    peakrdl fmt --check .
-
-It takes the same arguments as the ``rdlfmt`` command and returns the same
-:ref:`exit codes <exit-codes>` — it runs the very same binary, which ships in
-the wheel next to the ``peakrdl`` executable.
-
-Unlike every other PeakRDL subcommand, ``fmt`` does not compile or elaborate
-your design. It reads the source text, so it can format a file that does not
-yet elaborate.
