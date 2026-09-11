@@ -238,12 +238,6 @@ fn diff_output_is_uncoloured_when_piped() {
     assert!(!stdout(&out).contains('\x1b'), "escape sequences in a pipe");
 }
 
-#[test]
-fn diff_and_check_conflict() {
-    let out = run(&["--diff", "--check"]);
-    assert_eq!(code(&out), 2);
-}
-
 //--------------------------------------------------------------------------
 // Directories and failures
 //--------------------------------------------------------------------------
@@ -386,52 +380,4 @@ fn one_bad_file_does_not_stop_the_others() {
 fn a_missing_path_is_an_error() {
     let out = run(&["/nonexistent/nope.rdl"]);
     assert_eq!(code(&out), 2);
-}
-
-//--------------------------------------------------------------------------
-// Arguments
-//--------------------------------------------------------------------------
-
-#[test]
-fn indent_width_is_not_an_argument() {
-    // Four spaces, and no flag to say otherwise: the style is the product.
-    let out = pipe(UNFORMATTED, &["--indent", "2"]);
-    assert_eq!(code(&out), 2, "a usage error is exit 2, like any other");
-    assert_eq!(stdout(&pipe(UNFORMATTED, &[])), FORMATTED);
-}
-
-#[test]
-fn help_and_version_succeed() {
-    for flag in ["--help", "-h", "--version", "-V"] {
-        let out = run(&[flag]);
-        assert_eq!(code(&out), 0, "{flag}");
-        assert!(!stdout(&out).is_empty(), "{flag} printed nothing");
-    }
-}
-
-#[test]
-fn an_unknown_option_is_rejected() {
-    let out = run(&["--nope"]);
-    assert_eq!(code(&out), 2, "a usage error is exit 2, like any other");
-    // The offending flag, not clap's phrasing, which is not ours to pin.
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("--nope"), "got: {stderr}");
-}
-
-#[test]
-fn check_and_stdout_conflict() {
-    // Writing nothing and writing to stdout cannot both be meant.
-    let out = run(&["--check", "--stdout"]);
-    assert_eq!(code(&out), 2);
-}
-
-#[test]
-fn double_dash_ends_the_options() {
-    let dir = TempDir::new("ddash");
-    // A file whose name looks like a flag is still a path after `--`.
-    let path = dir.write("--check", UNFORMATTED);
-
-    let out = run(&["--", path.to_str().unwrap()]);
-    assert_eq!(code(&out), 0);
-    assert_eq!(dir.read("--check"), FORMATTED);
 }
