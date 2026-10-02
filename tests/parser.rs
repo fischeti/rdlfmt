@@ -456,3 +456,47 @@ fn escaped_identifier_is_a_name_not_a_keyword() {
     assert!(find(&tree, "EXPLICIT_COMPONENT_INST").is_some());
     assert_eq!(tree.to_string(), "my_reg \\reg;");
 }
+
+/// Input nested deeply enough to overflow the stack is refused with a single
+/// error instead, and still round-trips. Each shape reaches the depth by a
+/// different route through the grammar.
+#[test]
+fn excessive_nesting_is_an_error_not_a_crash() {
+    let n = 100_000;
+    let terms = vec!["a"; n].join(" + ");
+    let expressions = [
+        format!("{}a{}", "(".repeat(n), ")".repeat(n)),
+        terms,
+        format!("{}d", "a ? b : ".repeat(n)),
+        format!("{}a{}", "{1".repeat(n), "}".repeat(n)),
+    ];
+    let mut inputs: Vec<String> = expressions
+        .iter()
+        .map(|e| format!("addrmap t {{ x = {e}; }};"))
+        .collect();
+    inputs.push(format!("{}{}", "addrmap a { ".repeat(n), "}; ".repeat(n)));
+
+    for src in &inputs {
+        let parsed = parse(src);
+        assert_eq!(parsed.errors().len(), 1, "{:?}", parsed.errors());
+        assert!(parsed.errors()[0].message.contains("nested more than"));
+        assert_eq!(parsed.syntax().to_string(), *src);
+        assert!(rdlfmt::format(src).is_err());
+    }
+}
+
+/// Nesting short of the limit is still formatted, in an unoptimised build, on
+/// the 2 MiB stack a test runs on.
+#[test]
+fn deep_nesting_within_the_limit_formats() {
+    let n = 250;
+    let inputs = [
+        format!("addrmap t {{ x = {}a{}; }};", "(".repeat(n), ")".repeat(n)),
+        format!("addrmap t {{ x = {}; }};", vec!["a"; n].join(" + ")),
+        format!("{}{}", "addrmap a { ".repeat(n), "}; ".repeat(n)),
+    ];
+    for src in &inputs {
+        assert!(parse(src).errors().is_empty());
+        rdlfmt::format(src).expect("formats");
+    }
+}

@@ -128,12 +128,28 @@ pub fn parse(src: &str) -> Parsed {
     p.finish()
 }
 
+/// How deeply constructs may nest before the parser refuses the input.
+///
+/// Parsing and formatting both recurse once per level of nesting, so input
+/// nested deeply enough -- say ten thousand parentheses -- would otherwise
+/// overflow the stack and abort the process, rather than being refused like
+/// any other input the formatter cannot handle. Real register descriptions
+/// nest a few dozen levels at most; this bound is set so that the deepest input
+/// it admits still formats on a 2 MiB stack, the default for a spawned thread,
+/// in an unoptimised build.
+const MAX_DEPTH: usize = 256;
+
 pub(crate) struct Parser<'a> {
     tokens: Lexed<'a>,
     /// Index into `tokens`, counting trivia.
     pos: usize,
     builder: GreenNodeBuilder<'static>,
     errors: Vec<ParseError>,
+    /// Levels of nesting entered and not yet left. See [`Parser::nested`].
+    depth: usize,
+    /// Whether `depth` has exceeded [`MAX_DEPTH`]. Once it has, the rest of the
+    /// input has been consumed and every further error is a consequence.
+    too_deep: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -143,6 +159,8 @@ impl<'a> Parser<'a> {
             pos: 0,
             builder: GreenNodeBuilder::new(),
             errors: Vec::new(),
+            depth: 0,
+            too_deep: false,
         }
     }
 
@@ -258,6 +276,9 @@ impl<'a> Parser<'a> {
     }
 
     pub(crate) fn error(&mut self, message: impl Into<String>) {
+        if self.too_deep {
+            return;
+        }
         let range = self.current_range();
         self.errors.push(ParseError {
             message: message.into(),
@@ -274,6 +295,42 @@ impl<'a> Parser<'a> {
             self.bump();
         }
         self.finish_node();
+    }
+
+    /// Runs `f` one level of nesting deeper, or instead gives up on the input
+    /// if that is too deep.
+    ///
+    /// Giving up records a single error and consumes everything left into the
+    /// tree as it stands, which keeps it lossless and leaves every rule still
+    /// on the stack looking at the end of input, so the parse unwinds without
+    /// recursing any further.
+    pub(crate) fn nested(&mut self, f: impl FnOnce(&mut Self)) {
+        if self.enter() {
+            f(self);
+        }
+        self.leave();
+    }
+
+    /// Enters one level of nesting, returning whether that was allowed. Each
+    /// call must be matched by a [`Parser::leave`], allowed or not.
+    pub(crate) fn enter(&mut self) -> bool {
+        self.depth += 1;
+        if self.depth <= MAX_DEPTH {
+            return true;
+        }
+        if !self.too_deep {
+            self.error(format!("nested more than {MAX_DEPTH} levels deep"));
+            self.too_deep = true;
+            while self.pos < self.tokens.len() {
+                self.push(self.pos);
+                self.pos += 1;
+            }
+        }
+        false
+    }
+
+    pub(crate) fn leave(&mut self) {
+        self.depth -= 1;
     }
 
     pub(crate) fn start_node(&mut self, kind: SyntaxKind) {
