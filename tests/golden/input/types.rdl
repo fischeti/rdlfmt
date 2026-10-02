@@ -1,0 +1,10 @@
+enum my_enum{IDLE=0;BUSY=1{name="Busy";desc="b";};DONE;};
+enum empty_e {};
+struct base{longint unsigned a;boolean b;string c[];};
+abstract struct derived:base{base nested;accesstype at;};
+struct s2 { my_enum e ; addressingtype ad ; onreadtype ort ; onwritetype owt ; bit b2; longint l; };
+property p1{component=field|reg|regfile;type=string;default="x";constraint=componentwidth;};
+property p2 {type=longint unsigned[];component=all;};
+property p3 {type=ref; component = addrmap|mem|signal;};
+property p4 {type=boolean;component=constraint;};
+property p5 { type = base ; component = field ; default = base'{ a : 1 , b : true , c : '{"x"} } ; } ;

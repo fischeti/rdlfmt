@@ -1,0 +1,3 @@
+addrmap top {
+    reg {} r;
+};

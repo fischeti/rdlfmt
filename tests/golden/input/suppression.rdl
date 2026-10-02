@@ -1,0 +1,31 @@
+// rdlfmt: off
+addrmap   verbatim_top {
+      r x @ 0x0;
+};
+// rdlfmt: on
+addrmap top {
+    //rdlfmt:off
+    r   a   @ 0x0;
+    r b @ 0x4;
+    // rdlfmt:   on
+    r c @ 0x8;
+    /* rdlfmt: off */
+    r   d   @ 0xc;
+    r ctrl @ 0x10; // rdlfmt: off
+    r e @ 0x14;
+    // rdlfmt: skip
+    reg {   field {} f[0:0];   } r_skip   @ 0x18;
+    reg {
+        // rdlfmt: off
+        field   {}   f1[0:0];
+    } nested;
+    field   {}   after_nested[1:1];
+    // rdlfmt: off
+    // rdlfmt: skip
+    r   still_off;
+    // rdlfmt: bogus
+    r   z;
+};
+// rdlfmt: skip
+addrmap   skipped_top{r y;};
+addrmap   after_skip{r y;};

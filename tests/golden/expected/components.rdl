@@ -1,0 +1,42 @@
+addrmap top {
+    reg my_reg {
+        regwidth = 32;
+        field {
+            sw = rw; hw = r;
+        } a[7:0] = 0;
+        field {
+            sw = rw; hw = r;
+        } b[15:8];
+    };
+    my_reg ctrl    @ 0x0;
+    my_reg data[4] @ 0x10 += 0x4 %= 0x8;
+    my_reg x, y, z;
+    external   my_reg ext  @ 0x100;
+    internal   my_reg intl @ 0x104;
+    alias ctrl my_reg al   @ 0x108;
+    external reg {
+        field {} f[0:0];
+    } anon_ext[2] @ 0x200;
+    regfile rf {
+        my_reg r;
+    } rf0 @ 0x300, rf1 @ 0x400;
+    ctrl.a->sw = rw;
+    data[0].b->reset = 1;
+    ctrl.a->hdl_path_slice = '{ "x", "y" };
+    field {} lone[3:0] = 4'b1010;
+    mem {
+        mementries = 16;
+        memwidth = 32;
+    } m @ 0x1000;
+    signal {
+        activehigh;
+    } sig;
+    default sw = rw;
+    default hw = r;
+    encode = my_enum;
+    posedge intr;
+    nonsticky intr;
+    sw = rw; hw = r;
+    sw = rw;
+    hw = r;
+};

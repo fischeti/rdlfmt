@@ -1,0 +1,26 @@
+// header comment
+
+// second header after blank lines
+addrmap top { // beside the brace
+    // flush-left comment
+    name = "top"; // trailing, with padding
+
+    desc = "x"; /* inline block */
+    default regwidth = 32;
+    /* own-line block */
+    reg {
+        field {} f[0:0];
+    } r1;
+    /* multi
+       line
+         block */ reg {} r2;
+    reg { /* only a comment */
+    } r3;
+    reg {} r4;
+    a = 1 /* mid */ + /* mid2 */ 2;
+    b = 1 // ends line
+    + 2;
+}; // after the closing brace
+addrmap empty {};
+addrmap two {};
+// trailing comment at end of file
