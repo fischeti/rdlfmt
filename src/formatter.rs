@@ -717,6 +717,17 @@ impl<'a> Formatter<'a> {
     /// Computes padding from the completed rows and inserts it in one rebuild
     /// of the output. Layout is already final at this point.
     fn align(&mut self) {
+        // A comment is taken for a trailing one when it is written, before
+        // anyone can know whether more of the row follows it on the line. Now
+        // that every row is complete, one that did is just part of a cell.
+        for row in &mut self.rows {
+            if let Some(end) = row.end {
+                row.markers.retain(|marker| {
+                    marker.point != AlignPoint::TrailingComment || marker.pos >= end.byte
+                });
+            }
+        }
+
         let mut insertions: BTreeMap<usize, usize> = BTreeMap::new();
 
         for scope in &self.scopes {

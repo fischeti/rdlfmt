@@ -1079,6 +1079,17 @@ fn trailing_comments_line_up() {
     );
 }
 
+/// A block comment in the middle of a row is part of the cell it sits in, not a
+/// trailing comment: only one after the row's last token lines up as that.
+#[test]
+fn a_comment_inside_a_row_is_not_trailing() {
+    let out = check("addrmap a {\n    r /* t */ a @ 0x0; // one\n    r bbbbbb @ 0x4; // two\n};\n");
+    assert_eq!(
+        out,
+        "addrmap a {\n    r /* t */ a @ 0x0; // one\n    r bbbbbb    @ 0x4; // two\n};\n"
+    );
+}
+
 /// A comment on the line *before* a statement is not in that statement's row,
 /// even though the parser hands it over as leading trivia. Treating it as one
 /// would decline every annotated instantiation in a file.
