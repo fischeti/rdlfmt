@@ -219,6 +219,23 @@ fn block_comment_inside_a_body_leads_what_it_precedes() {
     assert_eq!(out, "addrmap a {\n    /* x */ name = \"y\";\n};\n");
 }
 
+/// A terminator attaches to a block comment as it does to code, rather than
+/// taking the space a comment otherwise keeps after itself.
+#[test]
+fn a_terminator_attaches_to_a_block_comment() {
+    let out = check("enum e {\n    D = 3 /* d */;\n};\n");
+    assert_eq!(out, "enum e {\n    D = 3 /* d */;\n};\n");
+    let out = check("addrmap a {\n    x = {a /* c */ , b};\n};\n");
+    assert_eq!(out, "addrmap a {\n    x = { a /* c */, b };\n};\n");
+}
+
+/// Unless the author ended the line after the comment, which is theirs to say.
+#[test]
+fn a_terminator_after_a_line_break_stays_there() {
+    let out = check("addrmap a {\n    r y /* c */\n    ;\n};\n");
+    assert_eq!(out, "addrmap a {\n    r y /* c */\n    ;\n};\n");
+}
+
 #[test]
 fn multiline_block_comment_is_followed_by_a_line_break() {
     let out = check("/* one\n   two */\naddrmap a {};\n");
