@@ -2,15 +2,10 @@
 //!
 //! # Writing is the default
 //!
-//! `rdlfmt foo.rdl` rewrites `foo.rdl`. There is no `--write` flag,
-//! because the overwhelmingly common thing to want is formatted files, and a
-//! flag that is passed every single time is not carrying information -- the
-//! same call rustfmt, black and ruff make. `--check`, `--diff` and `--stdout`
-//! are there for the times you want something else.
-//!
-//! What makes that defensible is not this file: [`rdlfmt::format`]
-//! verifies its own output before returning it, so a file is only ever replaced
-//! by one that lexes to the same code.
+//! `rdlfmt foo.rdl` rewrites `foo.rdl`, as rustfmt, black and ruff do;
+//! `--check`, `--diff` and `--stdout` do something else. That is safe because
+//! [`rdlfmt::format`] verifies its output, so a file is only ever replaced by
+//! one that lexes to the same code.
 
 mod diff;
 
@@ -20,9 +15,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// Cargo's palette, which is what a Rust toolchain user's eye is already
-/// calibrated to. `clap` turns colour off on its own when stdout is not a
-/// terminal or `NO_COLOR` is set, so this needs no condition around it.
+/// Cargo's palette. `clap` turns colour off itself when stdout is not a
+/// terminal or `NO_COLOR` is set.
 const STYLES: Styles = Styles::styled()
     .header(AnsiColor::Green.on_default().effects(Effects::BOLD))
     .usage(AnsiColor::Green.on_default().effects(Effects::BOLD))
@@ -90,8 +84,7 @@ fn main() -> ExitCode {
         failed: 0,
     };
 
-    // A lone `-` is the conventional spelling of stdin, and so means the same
-    // as passing no path at all.
+    // A lone `-` means stdin, the same as no path at all.
     let paths: Vec<&PathBuf> = cli
         .paths
         .iter()
@@ -143,9 +136,7 @@ impl Run {
         }
     }
 
-    /// Notes that `path` is not formatted, in whatever detail the mode asks
-    /// for. Silent when there is nothing to say, so that a clean run of
-    /// `--check` or `--diff` prints nothing at all.
+    /// Reports that `path` is not formatted, in the detail the mode asks for.
     fn report(&mut self, path: &Path, src: &str, out: &str) {
         if out == src {
             return;
@@ -173,30 +164,18 @@ impl Run {
         }
     }
 
-    /// Every `.rdl` file under `dir`, sorted so that output is reproducible.
+    /// Every `.rdl` file under `dir`, sorted.
     ///
-    /// What the walk descends into is what `git` would consider part of the
-    /// tree: `.gitignore` and `.ignore` are honoured, and entries whose name
-    /// starts with a `.` are skipped. Between them that keeps `rdlfmt .` out
-    /// of `.git`, `target/` and `build/` without a flag and without `rdlfmt`
-    /// needing to know what any of those are.
-    ///
-    /// Ignore rules only prune what a *walk discovers*. Naming a path
-    /// outright -- `rdlfmt build/regs.rdl`, or `rdlfmt build/` -- formats it
-    /// either way, because asking for something by name is a clearer
-    /// statement of intent than a pattern written for some other tool.
-    ///
-    /// A walk error is reported against the entry it happened on and the walk
-    /// carries on, so one unreadable directory does not cost you the rest of
-    /// the tree.
+    /// The walk honours `.gitignore` and `.ignore` and skips hidden entries, so
+    /// `rdlfmt .` stays out of `.git` and build directories. A path named
+    /// outright is formatted regardless. A walk error is reported and the walk
+    /// carries on.
     fn rdl_files(&mut self, dir: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
 
         let walk = ignore::WalkBuilder::new(dir)
-            // Off by default outside a git repository, which would make an
-            // exported or vendored tree behave differently from the one it
-            // came from. The `.gitignore` is the statement of intent; whether
-            // `.git` happens to still be next to it is not.
+            // Honour `.gitignore` outside a git repository too, so an exported
+            // tree behaves the same as the one it came from.
             .require_git(false)
             .build();
 
@@ -245,9 +224,7 @@ impl Run {
             }
             Mode::Check | Mode::Diff => self.report(path, &src, &out),
             Mode::Write => {
-                // An unchanged file is left alone rather than rewritten with
-                // identical bytes, so that formatting a tree does not touch
-                // every mtime and set every rebuild going.
+                // An unchanged file is not rewritten, so its mtime stays put.
                 if out == src {
                     return;
                 }

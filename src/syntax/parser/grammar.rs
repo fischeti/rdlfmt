@@ -659,10 +659,8 @@ fn constraint_body_elem(p: &mut Parser) {
             p.bump();
             expr(p);
         }
-        // `constr_relational` is spelled `expr op expr` in the grammar, but the
-        // expression grammar already contains the relational operators, so the
-        // call above consumed the whole comparison. Wrap what we have rather
-        // than demanding an operator that is now nested inside it.
+        // `expr` already consumed the whole comparison, operator included,
+        // so this wraps it rather than expecting an operator.
         _ => p.start_node_at(cp, CONSTR_RELATIONAL),
     }
     p.expect(SEMICOLON);
@@ -824,27 +822,21 @@ fn expr(p: &mut Parser) {
 
 /// Precedence climbing.
 ///
-/// `checkpoint` is what makes this work in a CST: the left operand is already
-/// in the tree by the time the operator is seen, so the enclosing
-/// `BINARY_EXPR` is inserted *retroactively* around it. Looping rather than
-/// recursing on the left gives left associativity.
-///
-/// Every expression nested inside another passes through here, so this is
-/// where expression nesting is bounded -- see [`Parser::nested`].
+/// The left operand is already in the tree when the operator is seen, so the
+/// `BINARY_EXPR` is wrapped around it from a checkpoint. Looping on the left
+/// gives left associativity. Every nested expression passes through here, so
+/// this is where expression nesting is bounded.
 fn expr_bp(p: &mut Parser, min_bp: u8) {
     p.nested(|p| {
         let cp = p.checkpoint();
         unary_expr(p);
 
-        // Each operator wraps everything parsed so far one level deeper, so a
-        // long chain nests as deeply as one written out in parentheses, and
-        // counts the same.
+        // Each operator wraps everything so far one level deeper, so it counts
+        // towards the nesting limit like a parenthesis.
         let mut wraps = 0;
         loop {
             let kind = p.current();
-            // An operator that binds too loosely for this call is left for the
-            // caller to absorb, which is what `filter` folds in: both "not a
-            // binary operator" and "binds too loosely" mean the same thing here.
+            // An operator that binds too loosely is left for the caller.
             let binary = binary_bp(kind).filter(|&bp| bp >= min_bp);
             let ternary = kind == QUESTION && min_bp <= TERNARY_BP;
             if binary.is_none() && !ternary {
@@ -977,13 +969,8 @@ fn paren_expr(p: &mut Parser) {
     p.finish_node();
 }
 
-/// `` `MAX(a, b) `` -- a reference to a function-like macro.
-///
-/// The arguments are parsed as expressions, which is what they are in every
-/// use a formatter could lay out anyway. Arguments that are arbitrary token
-/// soup -- legal, since the preprocessor substitutes text -- fail to parse and
-/// so are refused rather than reshaped, which is the right answer for input
-/// nobody can make sense of without the definitions.
+/// `` `MAX(a, b) ``, a reference to a function-like macro. Arguments are
+/// parsed as expressions; anything else is refused as a parse error.
 fn macro_call(p: &mut Parser) {
     p.start_node(MACRO_CALL);
     p.bump(); // `MACRO
@@ -1066,10 +1053,7 @@ fn struct_kv(p: &mut Parser) {
 // Helpers
 //--------------------------------------------------------------------------
 
-/// Consumes an identifier, accepting a keyword in its place.
-///
-/// SystemRDL reserves enough short words that the grammar has to allow
-/// keywords where names are expected; `\`-escaping is the author's way out.
+/// Consumes a name, accepting a keyword in its place, as the grammar does.
 fn expect_name(p: &mut Parser) {
     if p.current().is_ident_like() {
         p.bump();

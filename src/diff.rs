@@ -1,28 +1,19 @@
 //! Showing a formatting change as a diff.
 //!
-//! Part of the binary, not the library -- `mod diff;` is declared in `main.rs`
-//! and nothing in `lib.rs` reaches it.
-//!
 //! The shape follows `cargo fmt`: a `Diff in <path> at line <n>:` header per
 //! hunk, then three lines of context around each change, `-` for what is there
-//! now and `+` for what formatting would put there. Familiarity is the point --
-//! this is read in the same review as a `cargo fmt --check` failure, and a
-//! second diff dialect to learn would be a cost with no benefit.
+//! now and `+` for what formatting would put there.
 
 use anstyle::{AnsiColor, Style};
 use similar::{ChangeTag, TextDiff};
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 
-/// Lines of unchanged context on each side of a change. Three is what diff,
-/// git and rustfmt all settled on.
+/// Lines of unchanged context on each side of a change, as diff and git use.
 const CONTEXT: usize = 3;
 
-/// How to colour the three kinds of diff line.
-///
-/// Held as styles rather than as a boolean so the rendering below has no
-/// conditionals in it: [`Palette::plain`] renders to empty strings, so
-/// uncoloured output takes exactly the same path as coloured output.
+/// How to colour the three kinds of diff line. [`Palette::plain`] renders to
+/// empty strings, so uncoloured output takes the same path as coloured.
 pub struct Palette {
     header: Style,
     delete: Style,
@@ -48,9 +39,8 @@ impl Palette {
 
     /// The palette for `stream`, honouring the environment.
     ///
-    /// `NO_COLOR` wins over everything, then `CLICOLOR_FORCE`, then whether the
-    /// stream is actually a terminal -- the order the informal conventions ask
-    /// for, and the same answer `clap` reaches for its own help output.
+    /// `NO_COLOR` wins, then `CLICOLOR_FORCE`, then whether the stream is a
+    /// terminal.
     pub fn for_stream(stream: &impl IsTerminal) -> Palette {
         let set = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
 
@@ -65,8 +55,7 @@ impl Palette {
 
 /// Writes the difference between `before` and `after`, attributed to `path`.
 ///
-/// Writes nothing at all when the two are equal, so a caller can use "did this
-/// produce output" as the answer to "is this file formatted".
+/// Writes nothing when the two are equal.
 pub fn write(
     out: &mut impl Write,
     path: &Path,

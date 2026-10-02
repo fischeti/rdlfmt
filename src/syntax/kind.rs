@@ -1,41 +1,20 @@
 //! The single flat kind enum used for both tokens and nodes.
 //!
-//! rowan has no type hierarchy: a tree is built from one `#[repr(u16)]` enum
-//! where some variants are leaves carrying text (tokens) and the rest are
-//! interior nodes carrying children. Everything from `WHITESPACE` down to
-//! `LEX_ERROR` is a token; everything from `SOURCE_FILE` on is a node.
-//!
-//! The token half mirrors the lexer rules in `SystemRDL.g4`, plus the Clause 16
-//! preprocessor forms that grammar does not cover -- it describes the language
-//! *after* preprocessing, which is not the language a formatter is handed.
-//!
-//! The node half is *not* a 1:1 mirror of the parser rules. Rules that are pure
-//! alternation with no formatting decision attached (`literal`, `number`,
-//! `string_literal`, `udp_attr`, `struct_type`) are flattened away -- they would
-//! only add tree depth for the formatter to walk through. Conversely a few nodes
-//! exist here that the grammar inlines (`ENUM_BODY`, `STRUCT_BODY`, `UDP_BODY`),
-//! because a braced block is exactly where an indentation decision lives.
+//! Everything from `WHITESPACE` to `LEX_ERROR` is a token; everything from
+//! `SOURCE_FILE` on is a node. Tokens follow the lexer rules in `SystemRDL.g4`,
+//! plus the Clause 16 preprocessor forms that grammar leaves out. Nodes do not
+//! mirror the parser rules one to one: pure-alternation rules are flattened
+//! away, and braced blocks (`ENUM_BODY`, `STRUCT_BODY`, `UDP_BODY`) get nodes
+//! of their own, because that is where indentation is decided.
 
 use logos::{Lexer, Logos};
 
 /// Kinds of tokens and nodes in a SystemRDL syntax tree.
 ///
-/// Keywords are recognised by `logos` directly, like every other token. Two
-/// details make that work:
-///
-/// * Longest-match keeps keywords from swallowing names that merely start with
-///   one (`regfile`, `r_field`), and keeps escaped identifiers intact: `\reg`
-///   is four bytes to `reg`'s three, so it lexes as [`SyntaxKind::IDENT`] and
-///   the backslash does its job of letting a keyword be reused as a name.
-/// * `r` and `w` are the only keywords that do *not* beat the identifier rule
-///   on length, so they carry an explicit `priority`. Without it logos fails
-///   the build rather than picking a winner -- see the note on the keyword
-///   block below.
-///
-/// Note this makes keyword-ness purely lexical, matching `SystemRDL.g4`, where
-/// the keyword rules precede `ID`. Rules that accept a keyword where a name is
-/// expected do so by naming them explicitly (`prop_keyword`, `basic_data_type`),
-/// which on this side is [`SyntaxKind::is_ident_like`].
+/// Keywords are lexed like every other token, so keyword-ness is purely
+/// lexical, as in `SystemRDL.g4`. Longest match keeps `regfile` and `r_field`
+/// names, and `\reg` an escaped identifier. Where the grammar accepts a keyword
+/// as a name, the parser uses [`SyntaxKind::is_ident_like`].
 #[derive(Logos, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[allow(non_camel_case_types)]
 #[repr(u16)]
@@ -43,44 +22,30 @@ pub enum SyntaxKind {
     //--------------------------------------------------------------------
     // Trivia
     //--------------------------------------------------------------------
-    // Not skipped. A formatter needs every byte of the input in the tree, so
-    // whitespace and comments are ordinary tokens here rather than the hidden
-    // channel they live on in the ANTLR grammar.
+    // Ordinary tokens, not a hidden channel: the tree keeps every byte.
     #[regex(r"[ \t\r\n]+")]
     WHITESPACE,
-    // `allow_greedy` because run-to-end-of-line is the intended behaviour;
-    // logos flags `[^\r\n]*` as a dot-equivalent repetition by default.
+    // `allow_greedy`, because running to the end of the line is the point.
     #[regex(r"//[^\r\n]*", allow_greedy = true)]
     LINE_COMMENT,
-    // The classic non-nesting block comment pattern. Written this way (rather
-    // than the tempting `([^*]|\*[^/])*`) so that `/***/` matches.
+    // Written this way, not as `([^*]|\*[^/])*`, so that `/***/` matches.
     #[regex(r"/\*([^*]|\*+[^*/])*\*+/")]
     BLOCK_COMMENT,
 
     /// A text-substitution or file-inclusion directive: `` `define ``,
     /// `` `include ``, `` `line ``, `` `undef `` (Clause 16, Table 32).
     ///
-    /// Matched as *one* token running to the end of the logical line,
-    /// backslash-continuations included, because the payload is not SystemRDL.
-    /// A macro body is arbitrary substitution text; lexing into it would let
-    /// the formatter reshape something that is not code, and `` `define A 1+2 ``
-    /// is not an expression the way `1 + 2` is.
+    /// One token running to the end of the logical line, continuations
+    /// included: a macro body is substitution text, not code to reformat.
     #[regex(r"`(define|include|line|undef)", directive_line, priority = 20)]
     DIRECTIVE,
 
     /// A conditional-compilation directive: `` `if ``, `` `ifdef ``,
     /// `` `ifndef ``, `` `elsif ``, `` `else ``, `` `endif ``.
     ///
-    /// A separate kind from [`SyntaxKind::DIRECTIVE`] because it is the one
-    /// that can move a brace between branches -- nothing downstream acts on the
-    /// distinction today, but a `` `endif `` should not be filed under the same
-    /// name as a `` `define ``, and this is where a future region analysis would
-    /// start.
-    ///
-    /// Runs to the end of the line for the same reason the others do, though
-    /// the reason is sharper here: the `FOO` of `` `ifdef FOO `` is a macro
-    /// name, and left outside the token the parser would read it as the start
-    /// of an instantiation and report an error on the statement below.
+    /// Separate from [`SyntaxKind::DIRECTIVE`] because it is written flush left.
+    /// It also runs to the end of its line, so the `FOO` of `` `ifdef FOO `` is
+    /// not parsed as code.
     #[regex(r"`(ifdef|ifndef|elsif|endif|else|if)", directive_line, priority = 20)]
     COND_DIRECTIVE,
 
@@ -91,9 +56,8 @@ pub enum SyntaxKind {
     INT_NUMBER,
     #[regex(r"0[xX][0-9a-fA-F][0-9a-fA-F_]*")]
     HEX_NUMBER,
-    // Verilog-style sized literal, e.g. `8'hA5`. Note this competes with
-    // INT_NUMBER + TICK: `8'hA5` lexes as one VLOG_NUMBER because it is the
-    // longer match, while `32'(` falls back to INT_NUMBER, TICK, L_PAREN.
+    // Verilog-style sized literal, `8'hA5`. Longest match tells it from a
+    // cast width: `32'(` lexes as INT_NUMBER, TICK, L_PAREN.
     #[regex(r"[0-9]+'([bB][01][01_]*|[dD][0-9][0-9_]*|[hH][0-9a-fA-F][0-9a-fA-F_]*)")]
     VLOG_NUMBER,
     // Matches the grammar exactly: the only escapes are `\"` and `\\`.
@@ -103,23 +67,19 @@ pub enum SyntaxKind {
     IDENT,
     /// A text macro reference: `` `WIDTH ``, `` `MAX ``.
     ///
-    /// What it expands to is unknowable without the definitions, so it is
-    /// treated as an atom that may stand either for a value or for a name --
-    /// see [`SyntaxKind::is_ident_like`]. Longest-match keeps it from
-    /// swallowing the directives above, and keeps `` `defineFOO `` a macro
-    /// reference rather than a malformed `` `define ``.
+    /// An atom that may stand for a value or a name; see
+    /// [`SyntaxKind::is_ident_like`]. Longest match keeps `` `defineFOO `` a
+    /// reference rather than a directive.
     #[regex(r"`[a-zA-Z_][a-zA-Z0-9_]*")]
     MACRO_REF,
 
     //--------------------------------------------------------------------
     // Keywords
     //--------------------------------------------------------------------
-    // Every keyword out-prioritises `IDENT` by being a longer literal match,
-    // except the single-letter `r` and `w`: those tie with the identifier rule
-    // at logos' default priority 2 and need the explicit bump below.
+    // A keyword beats `IDENT` as a longer literal match, except `r` and `w`,
+    // which tie and need an explicit priority.
     //
-    // Variant order is load-bearing -- `is_keyword` tests the range
-    // `BOOLEAN_KW..=WITHIN_KW`.
+    // Variant order matters: `is_keyword` tests `BOOLEAN_KW..=WITHIN_KW`.
     #[token("boolean")]
     BOOLEAN_KW,
     #[token("bit")]
@@ -484,13 +444,9 @@ pub enum SyntaxKind {
 }
 
 impl SyntaxKind {
-    /// Whitespace, comments and preprocessor directives -- the tokens the
-    /// parser passes through verbatim and never makes a decision on.
-    ///
-    /// The conditionals are in here too, which is worth a word. It is not that
-    /// they are harmless -- a `` `ifdef `` really can open a brace its `` `else ``
-    /// closes -- but that a formatter never has to know. See the module docs in
-    /// [`crate::syntax::parser`] for why ignoring them is safe rather than merely cheap.
+    /// Whitespace, comments and preprocessor directives, conditionals included:
+    /// the tokens the parser never decides on. See [`crate::syntax::parser`]
+    /// for why ignoring a conditional is safe.
     pub fn is_trivia(self) -> bool {
         matches!(
             self,
@@ -502,8 +458,7 @@ impl SyntaxKind {
         matches!(self, SyntaxKind::LINE_COMMENT | SyntaxKind::BLOCK_COMMENT)
     }
 
-    /// A preprocessor directive of either kind -- the tokens that own a whole
-    /// line of the file.
+    /// A preprocessor directive of either kind; each owns its line.
     pub fn is_directive(self) -> bool {
         matches!(self, SyntaxKind::DIRECTIVE | SyntaxKind::COND_DIRECTIVE)
     }
@@ -512,17 +467,9 @@ impl SyntaxKind {
         SyntaxKind::BOOLEAN_KW <= self && self <= SyntaxKind::WITHIN_KW
     }
 
-    /// True for tokens that may stand in for a name.
-    ///
-    /// Several grammar rules accept a keyword where an identifier is expected
-    /// (`basic_data_type`, `normal_prop_assign`, ...), which is unavoidable
-    /// given how many short words SystemRDL reserves.
-    ///
-    /// A macro reference qualifies too, and for a stronger reason: it may
-    /// expand to anything, so `` `MY_REG_T inst; `` is as plausible as
-    /// `` field f[`WIDTH-1:0]; ``. Admitting it here is what lets one rule --
-    /// [`expect_name`](crate::syntax::parser) -- cover every position a macro can name
-    /// something in, instead of each of them growing a case for it.
+    /// True for tokens that may stand in for a name: identifiers, keywords
+    /// (several grammar rules accept one where a name is expected), and macro
+    /// references, which may expand to anything.
     pub fn is_ident_like(self) -> bool {
         matches!(self, SyntaxKind::IDENT | SyntaxKind::MACRO_REF) || self.is_keyword()
     }
@@ -533,10 +480,9 @@ impl SyntaxKind {
     /// If `raw` is not a valid discriminant.
     pub fn from_raw(raw: u16) -> SyntaxKind {
         assert!(raw < SyntaxKind::__LAST as u16, "invalid SyntaxKind: {raw}");
-        // SAFETY: `SyntaxKind` is `#[repr(u16)]` and declares no explicit
-        // discriminants, so its variants occupy 0..__LAST contiguously. The
-        // assert above establishes that `raw` is in that range. This is the
-        // standard rowan idiom for the `Language::kind_from_raw` round trip.
+        // SAFETY: `SyntaxKind` is `#[repr(u16)]` with no explicit
+        // discriminants, so its variants occupy 0..__LAST, and the assert
+        // above puts `raw` in that range.
         unsafe { std::mem::transmute::<u16, SyntaxKind>(raw) }
     }
 
@@ -547,10 +493,8 @@ impl SyntaxKind {
 
 /// Extends a [`SyntaxKind::DIRECTIVE`] match to the end of its logical line.
 ///
-/// A directive ends at a newline, except that a backslash immediately before
-/// one continues it -- which is how a `` `define `` spells a multi-line macro
-/// body. A backslash anywhere else is ordinary text (SystemRDL uses it to
-/// escape identifiers), so it is stepped over rather than treated as an escape.
+/// A backslash immediately before a newline continues the directive; anywhere
+/// else it is ordinary text.
 fn directive_line(lex: &mut Lexer<SyntaxKind>) {
     let rest = lex.remainder().as_bytes();
     let mut i = 0;
@@ -569,10 +513,8 @@ fn directive_line(lex: &mut Lexer<SyntaxKind>) {
                     i += 1;
                 }
             }
-            // Bumping through a multi-byte character one byte at a time is
-            // safe: every byte of one is >= 0x80 and so matches this arm, and
-            // the loop only *stops* on ASCII or at the end -- so `i` is always
-            // a char boundary by the time it is handed to `bump`.
+            // Safe byte by byte: the loop only stops on ASCII or at the end,
+            // so `i` is a char boundary when handed to `bump`.
             _ => i += 1,
         }
     }

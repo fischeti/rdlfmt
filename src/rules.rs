@@ -1,38 +1,19 @@
-//! Per-node formatting rules.
+//! Per-node formatting rules, reached through the [`format_node`] dispatch.
 //!
-//! One function per group of node kinds, reached through the [`format_node`]
-//! dispatch. Every kind has a rule except [`SyntaxKind::ERROR`], which falls
-//! through to [`Formatter::verbatim`] -- see its docs for why that arm stays.
+//! Expressions never break, so at most nodes the only question is whether the
+//! parts are separate words ([`spaced`]) or one word ([`tight`]).
+//! [`braced_body`] and [`param_list`] are the only rules that lay out lines;
+//! the rest are variations on `spaced` that mark alignment cells or space a
+//! delimited list.
 //!
-//! [`spaced`] and [`tight`] between them handle almost everything, because with
-//! expressions never breaking, the question at most nodes is only whether their
-//! parts are separate words or one word. [`braced_body`] and [`param_list`] are
-//! the two that lay anything out, and the rest are variations on `spaced` that
-//! mark alignment cells or space a delimited list.
+//! A rule walks its children with [`each`], which routes trivia to
+//! [`Formatter::trivia`] in source order, so a comment deep inside a child is
+//! still written before the child's first token.
 //!
-//! # The shape every rule has
-//!
-//! A rule walks the node's children through [`each`], which hands trivia to
-//! [`Formatter::trivia`] and everything else to the rule, which requests
-//! separation before it and recurses. Trivia is handled *in place* rather than
-//! hoisted out, which is what lets a comment buried at the front of a deeply
-//! nested child still be emitted before the child's first token -- recursion
-//! reaches it in source order without anyone having to look for it.
-//!
-//! # Who decides what
-//!
-//! A rule separates its own children from *each other* and never says what
-//! comes before its first one. That belongs to the parent, which is the only
-//! one that knows: `sw` needs a space in front of it in `default sw = rw`, and
-//! none in `a.b->sw`, and [`normal_prop_assign`](SyntaxKind::NORMAL_PROP_ASSIGN)
-//! cannot tell which it is in. Getting this backwards -- having each rule pad
-//! its own left edge -- is what forces formatters into trimming passes.
-//!
-//! Requests are minimums that combine by [`Ord::max`], so a rule states the
-//! least separation its construct needs and never has to consider what the
-//! surrounding one asked for. `reg my_reg` needs a space between the two; the
-//! statement being the first in a body, and so wanting a newline in front of
-//! `reg`, is not that rule's problem.
+//! A rule separates its children from each other and never says what comes
+//! before its first one: that belongs to the parent, the only one that knows
+//! (`sw` takes a space in `default sw = rw` but none in `a.b->sw`). Requests are
+//! minimums, so a rule asks for the least its construct needs.
 
 use crate::formatter::{AlignPoint, Formatter, RowFamily, Sep, leading_trivia, tokens};
 use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
@@ -95,11 +76,9 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
         | COMPONENT_INSTS
         | COMPONENT_INST => spaced(f, node),
 
-        // Everything that reads as one word. A reference and its subscripts are
-        // a single name (`a.b[0].c`), and an arrow binds as tightly as the dot
-        // does (`a.b->sw`) -- the property assignment hanging off it spaces
-        // itself from the inside, which is why the arrow needs no rule of its
-        // own.
+        // Everything that reads as one word: a reference and its subscripts
+        // (`a.b[0].c`), and an arrow, which binds as tightly as the dot
+        // (`a.b->sw`).
         INSTANCE_REF
         | INSTANCE_REF_ELEMENT
         | PROP_REF
@@ -126,16 +105,12 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
         PARAM_DEF_ELEM => param_def_elem(f, node),
         ENUM_ENTRY => enum_entry(f, node),
 
-        // Comma-separated lists that are part of an expression, and so never
-        // break however many elements they hold. A macro call belongs here
-        // rather than with `PARAM_INST`: it is an atom in an expression, and
-        // breaking `` `MAX(a, b) `` across lines would read as a construct of
-        // its own when it stands for a single value.
+        // Comma-separated lists inside an expression, which never break. A
+        // macro call is one of them: `` `MAX(a, b) `` stands for a value.
         CONCATENATE | REPLICATE | ARRAY_LITERAL | STRUCT_LITERAL | MACRO_CALL => {
             flat_list(f, node)
         }
 
-        // The only construct in the language whose layout is in question.
         PARAM_DEF | PARAM_INST => param_list(f, node),
 
         _ => f.verbatim(node),
@@ -172,16 +147,10 @@ fn element(f: &mut Formatter, child: SyntaxElement) {
     }
 }
 
-/// Top-level items, one per line, with blank lines between them preserved.
-///
-/// The `Sep::Newline` request before each item is what makes the author's blank
-/// lines count for anything: one arrives later, as the item's own leading
-/// trivia, and widens the break this asked for.
+/// Top-level items, one per line, keeping the blank lines between them.
 fn source_file(f: &mut Formatter, node: &SyntaxNode) {
     let mut region = false;
-    // The grammar wraps every top-level construct in a node, so a bare token
-    // here is stray input the parser could not place. It gets a line of its own
-    // rather than running into a neighbour.
+    // A bare token here is a stray `;`, which gets a line of its own.
     each(f, node, |f, _, child| {
         f.request(Sep::Newline);
         match child {
@@ -194,24 +163,18 @@ fn source_file(f: &mut Formatter, node: &SyntaxNode) {
     });
 }
 
-/// `{ ... }` -- the one layout in the language that is never in question.
+/// `{ ... }`: the opening brace on the owning statement's line, one item per
+/// line indented one level, and the closing brace on a line of its own.
 ///
-/// The style guide asks for the opening brace on the line of the statement that
-/// owns it, the contents indented one level, and the closing brace alone on its
-/// line. There is no width to measure and no alternative to weigh; the
-/// alignment IR records only padding boundaries after this layout is settled.
-///
-/// Two exceptions, both from the style guide: an empty body has nothing to
-/// indent, and `sw`/`hw` may share a line. See [`shares_line_with`].
+/// Except that a body with nothing to break for stays on one line (see
+/// [`is_flat`]), and `sw` and `hw` may share a line (see [`shares_line_with`]).
 fn braced_body(f: &mut Formatter, node: &SyntaxNode) {
-    // A floor rather than a decision: whatever the owning statement wanted, `{`
-    // may not abut the name in front of it.
+    // Whatever the owning statement asked for, `{` may not abut it.
     f.request(Sep::Space);
 
     if is_flat(node) {
-        // Whitespace between the braces is dropped rather than routed through
-        // `trivia`: all it could say is where a line breaks, and `is_flat`
-        // has already ruled that out wherever there is anything to separate.
+        // Whitespace inside the braces is dropped: all it could say is where
+        // a line breaks, and `is_flat` has ruled that out.
         let mut inside = false;
         let mut padded = false;
         for tok in node
@@ -252,8 +215,7 @@ fn braced_body(f: &mut Formatter, node: &SyntaxNode) {
         NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::R_BRACE => {
             f.close_alignment_scope();
             f.dedent();
-            // Pinned, not requested: a blank line in front of `}` is an
-            // editing artefact rather than a grouping to preserve.
+            // Pinned, so a blank line in front of `}` is dropped.
             f.pin(Sep::Newline);
             f.token(&tok);
         }
@@ -297,23 +259,15 @@ fn row_family(kind: SyntaxKind) -> RowFamily {
     }
 }
 
-/// Children separated by single spaces, terminators attached.
+/// Children separated by single spaces: `default regwidth = 32`, `a + b`.
 ///
-/// The default for anything built out of keywords, names and operators, which
-/// is most of the language: `reg my_reg #(...)`, `default regwidth = 32`,
-/// `longint unsigned WIDTH`, `alias foo`, `@ 0x10`. The style guide asks for a
-/// space on both sides of every assignment and expression operator, and this is
-/// what provides it.
-///
-/// Two things are tight instead. A `;` or `,` attaches to what precedes it,
-/// closing brace included, so a component definition ends `};`. And a subscript
-/// is part of the name it follows, so `STATUS[7:0]` and `data[4]` do not come
-/// apart.
+/// Except that `;` and `,` attach to what precedes them (`};`), and so does a
+/// subscript (`STATUS[7:0]`).
 fn spaced(f: &mut Formatter, node: &SyntaxNode) {
     spaced_by(f, node, element);
 }
 
-/// [`spaced`], with `emit` writing each child -- which is where a rule that
+/// [`spaced`], with `emit` writing each child, which is where a rule that
 /// marks alignment cells does so.
 fn spaced_by(
     f: &mut Formatter,
@@ -332,8 +286,8 @@ fn spaced_by(
     });
 }
 
-/// An explicit component instantiation, divided into the semantic cells which
-/// are meaningful across neighbouring statements.
+/// `external my_reg r @ 0x0;`, with the type, name, reset and address clauses
+/// as cells.
 fn explicit_component_inst(f: &mut Formatter, node: &SyntaxNode) {
     let instances = node
         .descendants()
@@ -342,16 +296,15 @@ fn explicit_component_inst(f: &mut Formatter, node: &SyntaxNode) {
     let parameterized = node
         .descendants()
         .any(|child| child.kind() == SyntaxKind::PARAM_INST);
-    // A parameter list introduces another cell structure in the middle of the
-    // statement. Treat the whole statement as a boundary rather than making a
-    // neighbouring simple instantiation line up across it.
+    // A parameter list or a second instance has cells of its own, so such a
+    // statement is not aligned.
     if instances != 1 || parameterized {
         spaced(f, node);
         return;
     }
 
-    // The first token is the type being instantiated: anything before it, like
-    // `external` or `alias ctrl`, is a node.
+    // The first token is the type: anything before it, like `external` or
+    // `alias ctrl`, is a node.
     let mut typed = false;
     spaced_by(f, node, |f, child| match child {
         NodeOrToken::Node(insts) if insts.kind() == SyntaxKind::COMPONENT_INSTS => {
@@ -371,8 +324,7 @@ fn explicit_component_inst(f: &mut Formatter, node: &SyntaxNode) {
     });
 }
 
-/// The one instance of an aligned instantiation: its name, then each of the
-/// reset and address clauses, as cells of their own.
+/// The single instance of an aligned instantiation.
 fn component_inst_aligned(f: &mut Formatter, child: SyntaxElement) {
     let NodeOrToken::Node(inst) = child else {
         return element(f, child);
@@ -423,25 +375,15 @@ fn enum_entry(f: &mut Formatter, node: &SyntaxNode) {
     });
 }
 
-/// Children with nothing between them.
-///
-/// For constructs that are one lexical unit despite having structure:
-/// `a.b[0].c`, `[7:0]`, `->sw`. Nothing here requests separation, so the tokens
-/// land exactly as adjacent as they were written -- but trivia still routes
-/// normally, so a comment wedged into a reference is not silently lost.
+/// Children with nothing between them: `a.b[0].c`, `[7:0]`, `-a`.
 fn tight(f: &mut Formatter, node: &SyntaxNode) {
     each(f, node, |f, _, child| element(f, child));
 }
 
-/// `this inside {1, 2, [3:4]};`
+/// `this inside { 1, 2, [3:4] };`: spaced up to the brace, then a value list.
 ///
-/// The one node that needs both shapes at once. Up to the brace it reads as a
-/// sentence, so `this` and `inside` are spaced; from the brace on it is a value
-/// list like a concatenation, so the delimiters attach to their contents.
-///
-/// Not folded into [`flat_list`], which cannot help here: the space belongs to
-/// the *keyword* before the brace, and the same brace is tight in `'{1, 2}` and
-/// `T'{p:1}`.
+/// Not [`flat_list`], because the brace here is spaced from the keyword before
+/// it, while in `'{1, 2}` it is not.
 fn inside_values(f: &mut Formatter, node: &SyntaxNode) {
     let mut braced = false;
     each(f, node, |f, prev, child| match child {
@@ -474,12 +416,8 @@ fn inside_values(f: &mut Formatter, node: &SyntaxNode) {
     });
 }
 
-/// `#(...)` -- a parameter definition or instantiation.
-///
-/// One element stays on the line; more than one goes one-per-line. The style
-/// guide asks for parameter lists to follow the same convention as braces, and
-/// this is the count that decides when to apply it. Nothing here measures a
-/// rendered width.
+/// `#(...)`, a parameter definition or instantiation: one element stays on the
+/// line, more than one go one per line, as the style guide asks.
 fn param_list(f: &mut Formatter, node: &SyntaxNode) {
     let elements = node
         .children()
@@ -498,13 +436,8 @@ fn param_list(f: &mut Formatter, node: &SyntaxNode) {
     }
 }
 
-/// Whether something inside `node` makes a flat rendering impossible.
-///
-/// A line comment runs to the end of its line and a multi-line block comment
-/// brings its own newlines, so either one lands a break in the middle of what
-/// was meant to be a single line. A preprocessor directive is the same case
-/// twice over: it must both begin and end a line. Breaking deliberately is
-/// better than emitting a line the formatter did not plan.
+/// Whether `node` holds something that would break a flat rendering anyway: a
+/// line comment, a multi-line block comment, or a directive.
 fn forces_break(node: &SyntaxNode) -> bool {
     node.descendants_with_tokens()
         .filter_map(NodeOrToken::into_token)
@@ -515,14 +448,8 @@ fn forces_break(node: &SyntaxNode) -> bool {
         })
 }
 
-/// `#(A = 1, B = 2)`, `{ a, b }`, `'{ a, b }` -- one space after each comma,
-/// and braces padded from their contents.
-///
-/// The padding is keyed to the brace rather than to the list, which is what
-/// keeps a flat parameter list tight: `#(.W(8))` and `#(longint unsigned W =
-/// 32)` are parenthesised, so the arms below never fire for them.
-///
-/// An empty list is never padded -- `{}` and `'{}` have nothing to hold apart.
+/// `#(.W(8))`, `{ a, b }`, `'{ a, b }`: a space after each comma, and braces
+/// (but not parentheses) padded from their contents unless the list is empty.
 fn flat_list(f: &mut Formatter, node: &SyntaxNode) {
     let padded = node.children().next().is_some();
     each(f, node, |f, prev, child| match child {
@@ -531,8 +458,8 @@ fn flat_list(f: &mut Formatter, node: &SyntaxNode) {
                 f.request(Sep::Space);
             }
             f.token(&tok);
-            // Requested *after* writing, so that it also holds a comment off
-            // the brace.
+            // Requested after writing, so it also holds a comment off the
+            // brace.
             if padded && tok.kind() == SyntaxKind::L_BRACE {
                 f.request(Sep::Space);
             }
@@ -546,8 +473,7 @@ fn flat_list(f: &mut Formatter, node: &SyntaxNode) {
     });
 }
 
-/// `abool: true` -- the colon attaches to the member name, the value is spaced
-/// off it.
+/// `abool: true`: the colon attaches to the name.
 fn struct_kv(f: &mut Formatter, node: &SyntaxNode) {
     each(f, node, |f, _, child| {
         let colon = child.kind() == SyntaxKind::COLON;
@@ -558,15 +484,9 @@ fn struct_kv(f: &mut Formatter, node: &SyntaxNode) {
     });
 }
 
-/// The braced-body layout applied to parentheses: `(` ends the line, elements
-/// are indented one per line, `)` gets a line of its own.
-///
-/// Unlike a body, this drops any blank line the author left between elements.
-/// Parameters are parts of one construct rather than statements, so there is no
-/// grouping in here to preserve -- see [`Formatter::allow_blank_lines`].
+/// The body layout applied to parentheses, except that blank lines between
+/// elements are dropped (see [`Formatter::allow_blank_lines`]).
 fn broken_list(f: &mut Formatter, node: &SyntaxNode) {
-    // Saved and restored rather than set back to `true`: what holds outside a
-    // parameter list is the caller's business, not this rule's.
     let outer = f.allow_blank_lines(false);
 
     each(f, node, |f, _, child| match child {
@@ -627,9 +547,8 @@ impl Suppression {
     }
 }
 
-/// Whether `item` is reproduced verbatim, applying the last marker in its
-/// leading trivia to `region` -- the suppression state of the statement
-/// sequence it belongs to.
+/// Whether `item` is reproduced verbatim. The last marker in its leading
+/// trivia updates `region`, which tracks `off` and `on` across a body.
 fn is_suppressed(region: &mut bool, item: &SyntaxNode) -> bool {
     let marker = leading_trivia(item)
         .filter(|tok| tok.kind().is_comment())
@@ -638,8 +557,6 @@ fn is_suppressed(region: &mut bool, item: &SyntaxNode) -> bool {
     match marker {
         Some(Suppression::Off) => *region = true,
         Some(Suppression::On) => *region = false,
-        // Governs one statement without disturbing the region around it, so a
-        // `skip` inside an `off` block is merely redundant.
         Some(Suppression::Skip) => return true,
         None => {}
     }
@@ -657,13 +574,9 @@ fn is_suffix(kind: SyntaxKind) -> bool {
     )
 }
 
-/// Whether a braced node holds nothing worth breaking for: no items, and no
-/// comment that needs a line break.
-///
-/// An empty body collapses to `{}` however many lines it spanned. One holding
-/// only block comments keeps its shape: `addrmap a { /* later */ };` stays on
-/// one line, but if the author broke a line in there, it stays broken -- moving
-/// the comment would put it somewhere it was not written.
+/// Whether a body stays on one line: it holds no items, and either no comments
+/// or only block comments with no line break among them. An empty body
+/// collapses to `{}`; `{ /* later */ }` keeps its shape.
 fn is_flat(node: &SyntaxNode) -> bool {
     let mut comments = false;
     let mut newline = false;
@@ -686,13 +599,8 @@ fn is_flat(node: &SyntaxNode) -> bool {
     !(comments && newline)
 }
 
-/// The style guide's one exception to a statement per line: `sw` and `hw` may
-/// share, "as they're nearly always used together".
-///
-/// Preserved rather than imposed. Authors who write them apart keep them apart,
-/// and nothing is ever joined that was not already joined -- which is also what
-/// makes the rule idempotent, since the output it produces is an input it
-/// recognises.
+/// Whether `item` stays on the line of `prev`: the style guide lets `sw` and
+/// `hw` share a line. Only an existing shared line is kept; none is created.
 fn shares_line_with(item: &SyntaxNode, prev: Option<&SyntaxNode>) -> bool {
     prev.is_some_and(|prev| {
         is_sw_or_hw(prev)
@@ -701,8 +609,7 @@ fn shares_line_with(item: &SyntaxNode, prev: Option<&SyntaxNode>) -> bool {
     })
 }
 
-/// A `sw = ...` or `hw = ...` assignment, and not `default sw = ...`, which
-/// leads with a keyword and reads as a statement of its own.
+/// A `sw = ...` or `hw = ...` assignment, but not `default sw = ...`.
 fn is_sw_or_hw(node: &SyntaxNode) -> bool {
     node.kind() == SyntaxKind::LOCAL_PROPERTY_ASSIGNMENT
         && tokens(node)
