@@ -4,19 +4,20 @@
 //! dispatch. Every kind has a rule except [`SyntaxKind::ERROR`], which falls
 //! through to [`Formatter::verbatim`] -- see its docs for why that arm stays.
 //!
-//! Four rules cover the language. [`spaced`] and [`tight`] between them handle
-//! almost everything, because with expressions never breaking, the question at
-//! most nodes is only whether their parts are separate words or one word.
-//! [`braced_body`] and [`param_list`] are the two that lay anything out.
+//! [`spaced`] and [`tight`] between them handle almost everything, because with
+//! expressions never breaking, the question at most nodes is only whether their
+//! parts are separate words or one word. [`braced_body`] and [`param_list`] are
+//! the two that lay anything out, and the rest are variations on `spaced` that
+//! mark alignment cells or space a delimited list.
 //!
 //! # The shape every rule has
 //!
-//! A rule walks `children_with_tokens()` and does three things with what it
-//! finds: hands trivia to [`Formatter::trivia`], requests separation before
-//! each significant child, and recurses. Trivia is handled *in place* rather
-//! than hoisted out, which is what lets a comment buried at the front of a
-//! deeply nested child still be emitted before the child's first token --
-//! recursion reaches it in source order without anyone having to look for it.
+//! A rule walks the node's children through [`each`], which hands trivia to
+//! [`Formatter::trivia`] and everything else to the rule, which requests
+//! separation before it and recurses. Trivia is handled *in place* rather than
+//! hoisted out, which is what lets a comment buried at the front of a deeply
+//! nested child still be emitted before the child's first token -- recursion
+//! reaches it in source order without anyone having to look for it.
 //!
 //! # Who decides what
 //!
@@ -33,8 +34,8 @@
 //! statement being the first in a body, and so wanting a newline in front of
 //! `reg`, is not that rule's problem.
 
-use crate::formatter::{AlignPoint, Formatter, RowFamily, Sep};
-use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
+use crate::formatter::{AlignPoint, Formatter, RowFamily, Sep, leading_trivia, tokens};
+use crate::syntax::{SyntaxElement, SyntaxKind, SyntaxNode};
 use rowan::NodeOrToken;
 
 pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
@@ -88,7 +89,11 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
         // Constraints: `this > 0`, `this inside myEnum`, `a = 1`.
         | CONSTR_RELATIONAL
         | CONSTR_PROP_ASSIGN
-        | CONSTR_INSIDE_ENUM => spaced(f, node),
+        | CONSTR_INSIDE_ENUM
+        // An instantiation that `explicit_component_inst` does not align: a
+        // parameterized one, or one declaring several instances.
+        | COMPONENT_INSTS
+        | COMPONENT_INST => spaced(f, node),
 
         // Everything that reads as one word. A reference and its subscripts are
         // a single name (`a.b[0].c`), and an arrow binds as tightly as the dot
@@ -121,10 +126,6 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
         PARAM_DEF_ELEM => param_def_elem(f, node),
         ENUM_ENTRY => enum_entry(f, node),
 
-        // These are normally reached through `explicit_component_inst`, but
-        // retain sensible standalone rules for hand-built/error-tolerant CSTs.
-        COMPONENT_INSTS | COMPONENT_INST => spaced(f, node),
-
         // Comma-separated lists that are part of an expression, and so never
         // break however many elements they hold. A macro call belongs here
         // rather than with `PARAM_INST`: it is an atom in an expression, and
@@ -141,6 +142,36 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
     }
 }
 
+/// Walks the children of `node`: trivia goes to [`Formatter::trivia`], and
+/// everything else to `on`, along with the kind of the significant child
+/// before it.
+fn each(
+    f: &mut Formatter,
+    node: &SyntaxNode,
+    mut on: impl FnMut(&mut Formatter, Option<SyntaxKind>, SyntaxElement),
+) {
+    let mut prev = None;
+    for child in node.children_with_tokens() {
+        if let NodeOrToken::Token(tok) = &child
+            && tok.kind().is_trivia()
+        {
+            f.trivia(tok);
+            continue;
+        }
+        let kind = child.kind();
+        on(f, prev, child);
+        prev = Some(kind);
+    }
+}
+
+/// Writes a token, or formats a node by its own rule.
+fn element(f: &mut Formatter, child: SyntaxElement) {
+    match child {
+        NodeOrToken::Token(tok) => f.token(&tok),
+        NodeOrToken::Node(node) => format_node(f, &node),
+    }
+}
+
 /// Top-level items, one per line, with blank lines between them preserved.
 ///
 /// The `Sep::Newline` request before each item is what makes the author's blank
@@ -148,27 +179,19 @@ pub(crate) fn format_node(f: &mut Formatter, node: &SyntaxNode) {
 /// trivia, and widens the break this asked for.
 fn source_file(f: &mut Formatter, node: &SyntaxNode) {
     let mut region = false;
-
-    for child in node.children_with_tokens() {
+    // The grammar wraps every top-level construct in a node, so a bare token
+    // here is stray input the parser could not place. It gets a line of its own
+    // rather than running into a neighbour.
+    each(f, node, |f, _, child| {
+        f.request(Sep::Newline);
         match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            // The grammar wraps every top-level construct in a node, so a bare
-            // token here is stray input the parser could not place. Give it a
-            // line of its own rather than letting it run into a neighbour.
-            NodeOrToken::Token(tok) => {
-                f.request(Sep::Newline);
-                f.token(&tok);
-            }
             NodeOrToken::Node(item) => {
-                f.request(Sep::Newline);
-                if is_suppressed(&mut region, &item) {
-                    f.verbatim(&item);
-                } else {
-                    format_node(f, &item);
-                }
+                let verbatim = is_suppressed(&mut region, &item);
+                statement(f, &item, verbatim);
             }
+            stray => element(f, stray),
         }
-    }
+    });
 }
 
 /// `{ ... }` -- the one layout in the language that is never in question.
@@ -189,10 +212,11 @@ fn braced_body(f: &mut Formatter, node: &SyntaxNode) {
         // Whitespace between the braces is dropped rather than routed through
         // `trivia`: with nothing between `{` and `}` to separate, there is
         // nothing for it to say.
-        for child in node.children_with_tokens() {
-            if let NodeOrToken::Token(tok) = child
-                && !tok.kind().is_trivia()
-            {
+        for tok in node
+            .children_with_tokens()
+            .filter_map(NodeOrToken::into_token)
+        {
+            if !tok.kind().is_trivia() {
                 f.token(&tok);
             }
         }
@@ -201,48 +225,50 @@ fn braced_body(f: &mut Formatter, node: &SyntaxNode) {
 
     let mut prev: Option<SyntaxNode> = None;
     let mut region = false;
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::L_BRACE => {
-                f.token(&tok);
-                f.indent();
-                f.settle_width();
-                f.open_alignment_scope();
-            }
-            NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::R_BRACE => {
-                f.close_alignment_scope();
-                f.dedent();
-                // Pinned, not requested: a blank line in front of `}` is an
-                // editing artefact rather than a grouping to preserve.
-                f.pin(Sep::Newline);
-                f.token(&tok);
-            }
-            NodeOrToken::Token(tok) => {
-                f.request(Sep::Newline);
-                f.token(&tok);
-            }
-            NodeOrToken::Node(item) => {
-                let verbatim = is_suppressed(&mut region, &item);
-                f.request(if shares_line_with(&item, prev.as_ref()) {
-                    Sep::Space
-                } else {
-                    Sep::Newline
-                });
-                f.begin_row(if verbatim {
-                    RowFamily::Other
-                } else {
-                    row_family(item.kind())
-                });
-                if verbatim {
-                    f.verbatim(&item);
-                } else {
-                    format_node(f, &item);
-                }
-                f.end_row();
-                prev = Some(item);
-            }
+    each(f, node, |f, _, child| match child {
+        NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::L_BRACE => {
+            f.token(&tok);
+            f.indent();
+            f.settle_width();
+            f.open_alignment_scope();
         }
+        NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::R_BRACE => {
+            f.close_alignment_scope();
+            f.dedent();
+            // Pinned, not requested: a blank line in front of `}` is an
+            // editing artefact rather than a grouping to preserve.
+            f.pin(Sep::Newline);
+            f.token(&tok);
+        }
+        NodeOrToken::Token(tok) => {
+            f.request(Sep::Newline);
+            f.token(&tok);
+        }
+        NodeOrToken::Node(item) => {
+            let verbatim = is_suppressed(&mut region, &item);
+            f.request(if shares_line_with(&item, prev.as_ref()) {
+                Sep::Space
+            } else {
+                Sep::Newline
+            });
+            f.begin_row(if verbatim {
+                RowFamily::Other
+            } else {
+                row_family(item.kind())
+            });
+            statement(f, &item, verbatim);
+            f.end_row();
+            prev = Some(item);
+        }
+    });
+}
+
+/// Formats a statement, or reproduces it as written if a marker suppressed it.
+fn statement(f: &mut Formatter, item: &SyntaxNode, verbatim: bool) {
+    if verbatim {
+        f.verbatim(item);
+    } else {
+        format_node(f, item);
     }
 }
 
@@ -252,6 +278,41 @@ fn row_family(kind: SyntaxKind) -> RowFamily {
         SyntaxKind::ENUM_ENTRY => RowFamily::EnumEntry,
         _ => RowFamily::Other,
     }
+}
+
+/// Children separated by single spaces, terminators attached.
+///
+/// The default for anything built out of keywords, names and operators, which
+/// is most of the language: `reg my_reg #(...)`, `default regwidth = 32`,
+/// `longint unsigned WIDTH`, `alias foo`, `@ 0x10`. The style guide asks for a
+/// space on both sides of every assignment and expression operator, and this is
+/// what provides it.
+///
+/// Two things are tight instead. A `;` or `,` attaches to what precedes it,
+/// closing brace included, so a component definition ends `};`. And a subscript
+/// is part of the name it follows, so `STATUS[7:0]` and `data[4]` do not come
+/// apart.
+fn spaced(f: &mut Formatter, node: &SyntaxNode) {
+    spaced_by(f, node, element);
+}
+
+/// [`spaced`], with `emit` writing each child -- which is where a rule that
+/// marks alignment cells does so.
+fn spaced_by(
+    f: &mut Formatter,
+    node: &SyntaxNode,
+    mut emit: impl FnMut(&mut Formatter, SyntaxElement),
+) {
+    each(f, node, |f, prev, child| {
+        let attached = match &child {
+            NodeOrToken::Token(tok) => is_terminator(tok.kind()),
+            NodeOrToken::Node(node) => is_suffix(node.kind()),
+        };
+        if prev.is_some() && !attached {
+            f.request(Sep::Space);
+        }
+        emit(f, child);
+    });
 }
 
 /// An explicit component instantiation, divided into the semantic cells which
@@ -272,182 +333,77 @@ fn explicit_component_inst(f: &mut Formatter, node: &SyntaxNode) {
         return;
     }
 
-    let mut first = true;
-    let mut saw_type = false;
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::SEMICOLON => f.token(&tok),
-            NodeOrToken::Token(tok) => {
-                if !saw_type {
-                    if !first {
-                        f.request(Sep::Space);
-                    }
-                    f.align_before(AlignPoint::InstType);
-                    f.token(&tok);
-                    saw_type = true;
-                } else {
-                    if !first {
-                        f.request(Sep::Space);
-                    }
-                    f.token(&tok);
-                }
-                first = false;
-            }
-            NodeOrToken::Node(child) if child.kind() == SyntaxKind::COMPONENT_INSTS => {
-                if !first {
-                    f.request(Sep::Space);
-                }
-                component_insts_aligned(f, &child);
-                first = false;
-            }
-            NodeOrToken::Node(child) => {
-                if !first {
-                    f.request(Sep::Space);
-                }
-                format_node(f, &child);
-                first = false;
-            }
+    // The first token is the type being instantiated: anything before it, like
+    // `external` or `alias ctrl`, is a node.
+    let mut typed = false;
+    spaced_by(f, node, |f, child| match child {
+        NodeOrToken::Node(insts) if insts.kind() == SyntaxKind::COMPONENT_INSTS => {
+            spaced_by(f, &insts, component_inst_aligned);
         }
-    }
+        child => {
+            if !typed
+                && child
+                    .as_token()
+                    .is_some_and(|tok| !is_terminator(tok.kind()))
+            {
+                f.align_before(AlignPoint::InstType);
+                typed = true;
+            }
+            element(f, child);
+        }
+    });
 }
 
-fn component_insts_aligned(f: &mut Formatter, node: &SyntaxNode) {
-    let mut saw_part = false;
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) => f.token(&tok),
-            NodeOrToken::Node(child) if child.kind() == SyntaxKind::COMPONENT_INST => {
-                if saw_part {
-                    f.request(Sep::Space);
-                }
-                f.align_before(AlignPoint::InstName);
-                component_inst_aligned(f, &child);
-                saw_part = true;
-            }
-            NodeOrToken::Node(child) => {
-                format_node(f, &child);
-                saw_part = true;
-            }
-        }
+/// The one instance of an aligned instantiation: its name, then each of the
+/// reset and address clauses, as cells of their own.
+fn component_inst_aligned(f: &mut Formatter, child: SyntaxElement) {
+    let NodeOrToken::Node(inst) = child else {
+        return element(f, child);
+    };
+    if inst.kind() != SyntaxKind::COMPONENT_INST {
+        return format_node(f, &inst);
     }
+    f.align_before(AlignPoint::InstName);
+    spaced_by(f, &inst, |f, part| {
+        let point = match part.kind() {
+            SyntaxKind::FIELD_INST_RESET => Some(AlignPoint::InstReset),
+            SyntaxKind::INST_ADDR_FIXED => Some(AlignPoint::InstAddress),
+            SyntaxKind::INST_ADDR_STRIDE => Some(AlignPoint::InstStride),
+            SyntaxKind::INST_ADDR_ALIGN => Some(AlignPoint::InstAlign),
+            _ => None,
+        };
+        if let Some(point) = point {
+            f.align_before(point);
+        }
+        element(f, part);
+    });
 }
 
-fn component_inst_aligned(f: &mut Formatter, node: &SyntaxNode) {
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) => f.token(&tok),
-            NodeOrToken::Node(child) => {
-                let point = match child.kind() {
-                    SyntaxKind::FIELD_INST_RESET => Some(AlignPoint::InstReset),
-                    SyntaxKind::INST_ADDR_FIXED => Some(AlignPoint::InstAddress),
-                    SyntaxKind::INST_ADDR_STRIDE => Some(AlignPoint::InstStride),
-                    SyntaxKind::INST_ADDR_ALIGN => Some(AlignPoint::InstAlign),
-                    _ => None,
-                };
-                if let Some(point) = point {
-                    f.request(Sep::Space);
-                    f.align_before(point);
-                }
-                format_node(f, &child);
-            }
-        }
-    }
-}
-
+/// `longint unsigned W = 32`, with the name and the default as cells.
 fn param_def_elem(f: &mut Formatter, node: &SyntaxNode) {
-    let mut first = true;
-    let mut saw_type = false;
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) => {
-                if !first && !is_terminator(&tok) {
-                    f.request(Sep::Space);
-                }
-                if saw_type && tok.kind().is_ident_like() {
-                    f.align_before(AlignPoint::ParamName);
-                    saw_type = false;
-                } else if tok.kind() == SyntaxKind::ASSIGN {
-                    f.align_before(AlignPoint::ParamDefault);
-                }
-                f.token(&tok);
-                first = false;
+    let mut typed = false;
+    spaced_by(f, node, |f, child| {
+        match child.kind() {
+            SyntaxKind::DATA_TYPE => typed = true,
+            SyntaxKind::ASSIGN => f.align_before(AlignPoint::ParamDefault),
+            kind if typed && kind.is_ident_like() => {
+                f.align_before(AlignPoint::ParamName);
+                typed = false;
             }
-            NodeOrToken::Node(child) => {
-                if !first && !is_suffix(child.kind()) {
-                    f.request(Sep::Space);
-                }
-                let is_type = child.kind() == SyntaxKind::DATA_TYPE;
-                format_node(f, &child);
-                saw_type |= is_type;
-                first = false;
-            }
+            _ => {}
         }
-    }
+        element(f, child);
+    });
 }
 
+/// `IDLE = 0;`, with the value as a cell.
 fn enum_entry(f: &mut Formatter, node: &SyntaxNode) {
-    let mut first = true;
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) => {
-                if !first && !is_terminator(&tok) {
-                    f.request(Sep::Space);
-                }
-                if tok.kind() == SyntaxKind::ASSIGN {
-                    f.align_before(AlignPoint::EnumValue);
-                }
-                f.token(&tok);
-                first = false;
-            }
-            NodeOrToken::Node(child) => {
-                if !first {
-                    f.request(Sep::Space);
-                }
-                format_node(f, &child);
-                first = false;
-            }
+    spaced_by(f, node, |f, child| {
+        if child.kind() == SyntaxKind::ASSIGN {
+            f.align_before(AlignPoint::EnumValue);
         }
-    }
-}
-
-/// Children separated by single spaces, terminators attached.
-///
-/// The default for anything built out of keywords, names and operators, which
-/// is most of the language: `reg my_reg #(...)`, `default regwidth = 32`,
-/// `longint unsigned WIDTH`, `alias foo`, `@ 0x10`. The style guide asks for a
-/// space on both sides of every assignment and expression operator, and this is
-/// what provides it.
-///
-/// Two things are tight instead. A `;` or `,` attaches to what precedes it,
-/// closing brace included, so a component definition ends `};`. And a subscript
-/// is part of the name it follows, so `STATUS[7:0]` and `data[4]` do not come
-/// apart.
-fn spaced(f: &mut Formatter, node: &SyntaxNode) {
-    let mut first = true;
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) => {
-                if !first && !is_terminator(&tok) {
-                    f.request(Sep::Space);
-                }
-                f.token(&tok);
-                first = false;
-            }
-            NodeOrToken::Node(child) => {
-                if !first && !is_suffix(child.kind()) {
-                    f.request(Sep::Space);
-                }
-                format_node(f, &child);
-                first = false;
-            }
-        }
-    }
+        element(f, child);
+    });
 }
 
 /// Children with nothing between them.
@@ -457,13 +413,7 @@ fn spaced(f: &mut Formatter, node: &SyntaxNode) {
 /// land exactly as adjacent as they were written -- but trivia still routes
 /// normally, so a comment wedged into a reference is not silently lost.
 fn tight(f: &mut Formatter, node: &SyntaxNode) {
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) => f.token(&tok),
-            NodeOrToken::Node(child) => format_node(f, &child),
-        }
-    }
+    each(f, node, |f, _, child| element(f, child));
 }
 
 /// `this inside {1, 2, [3:4]};`
@@ -474,69 +424,46 @@ fn tight(f: &mut Formatter, node: &SyntaxNode) {
 ///
 /// Not folded into [`flat_list`], which cannot help here: the space belongs to
 /// the *keyword* before the brace, and the same brace is tight in `'{1, 2}` and
-/// `T'{p:1}`. Deciding that from a shared rule would mean tracking the previous
-/// token's kind everywhere to serve one construct.
+/// `T'{p:1}`.
 fn inside_values(f: &mut Formatter, node: &SyntaxNode) {
-    let mut first = true;
     let mut braced = false;
-    let mut after_comma = false;
-
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) => {
-                match tok.kind() {
-                    SyntaxKind::L_BRACE => {
-                        f.request(Sep::Space);
-                        f.token(&tok);
-                        // Pad the contents, as every other brace list does.
-                        f.request(Sep::Space);
-                        braced = true;
-                    }
-                    SyntaxKind::R_BRACE => {
-                        f.request(Sep::Space);
-                        f.token(&tok);
-                        braced = false;
-                    }
-                    _ => {
-                        if !first && !braced && !is_terminator(&tok) {
-                            f.request(Sep::Space);
-                        }
-                        f.token(&tok);
-                    }
-                }
-                after_comma = tok.kind() == SyntaxKind::COMMA;
-                first = false;
+    each(f, node, |f, prev, child| match child {
+        NodeOrToken::Token(tok) => match tok.kind() {
+            SyntaxKind::L_BRACE => {
+                f.request(Sep::Space);
+                f.token(&tok);
+                // Pad the contents, as every other brace list does.
+                f.request(Sep::Space);
+                braced = true;
             }
-            NodeOrToken::Node(child) => {
-                if after_comma || (!first && !braced) {
+            SyntaxKind::R_BRACE => {
+                f.request(Sep::Space);
+                f.token(&tok);
+                braced = false;
+            }
+            kind => {
+                if prev.is_some() && !braced && !is_terminator(kind) {
                     f.request(Sep::Space);
                 }
-                format_node(f, &child);
-                after_comma = false;
-                first = false;
+                f.token(&tok);
             }
+        },
+        NodeOrToken::Node(value) => {
+            if prev == Some(SyntaxKind::COMMA) || (prev.is_some() && !braced) {
+                f.request(Sep::Space);
+            }
+            format_node(f, &value);
         }
-    }
+    });
 }
 
-/// The two shapes a delimited list can take.
+/// `#(...)` -- a parameter definition or instantiation.
 ///
-/// This enum is the entire layout question in this formatter, and
-/// [`param_list_layout`] is the only place it is answered. Both are structural:
-/// nothing here measures a rendered width. The small alignment IR is consulted
-/// only after this choice and every other line break is final.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Layout {
-    Flat,
-    Broken,
-}
-
-/// One element stays on the line; more than one goes one-per-line.
-///
-/// The style guide asks for parameter lists to follow the same convention as
-/// braces, and this is the count that decides when to apply it.
-fn param_list_layout(node: &SyntaxNode) -> Layout {
+/// One element stays on the line; more than one goes one-per-line. The style
+/// guide asks for parameter lists to follow the same convention as braces, and
+/// this is the count that decides when to apply it. Nothing here measures a
+/// rendered width.
+fn param_list(f: &mut Formatter, node: &SyntaxNode) {
     let elements = node
         .children()
         .filter(|child| {
@@ -548,9 +475,9 @@ fn param_list_layout(node: &SyntaxNode) -> Layout {
         .count();
 
     if elements > 1 || forces_break(node) {
-        Layout::Broken
+        broken_list(f, node);
     } else {
-        Layout::Flat
+        flat_list(f, node);
     }
 }
 
@@ -562,22 +489,13 @@ fn param_list_layout(node: &SyntaxNode) -> Layout {
 /// twice over: it must both begin and end a line. Breaking deliberately is
 /// better than emitting a line the formatter did not plan.
 fn forces_break(node: &SyntaxNode) -> bool {
-    node.descendants_with_tokens().any(|child| match child {
-        NodeOrToken::Node(_) => false,
-        NodeOrToken::Token(tok) => {
+    node.descendants_with_tokens()
+        .filter_map(NodeOrToken::into_token)
+        .any(|tok| {
             tok.kind() == SyntaxKind::LINE_COMMENT
                 || tok.kind().is_directive()
                 || (tok.kind().is_comment() && tok.text().contains('\n'))
-        }
-    })
-}
-
-/// `#(...)` -- a parameter definition or instantiation.
-fn param_list(f: &mut Formatter, node: &SyntaxNode) {
-    match param_list_layout(node) {
-        Layout::Flat => flat_list(f, node),
-        Layout::Broken => broken_list(f, node),
-    }
+        })
 }
 
 /// `#(A = 1, B = 2)`, `{ a, b }`, `'{ a, b }` -- one space after each comma,
@@ -590,50 +508,37 @@ fn param_list(f: &mut Formatter, node: &SyntaxNode) {
 /// An empty list is never padded -- `{}` and `'{}` have nothing to hold apart.
 fn flat_list(f: &mut Formatter, node: &SyntaxNode) {
     let padded = node.children().next().is_some();
-    let mut after_comma = false;
-
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) => {
-                if padded && tok.kind() == SyntaxKind::R_BRACE {
-                    f.request(Sep::Space);
-                }
-                f.token(&tok);
-                // Requested *after* writing, which the next thing written
-                // materialises -- the separator model needs no notion of
-                // "space after" beyond leaving one pending.
-                if padded && tok.kind() == SyntaxKind::L_BRACE {
-                    f.request(Sep::Space);
-                }
-                after_comma = tok.kind() == SyntaxKind::COMMA;
+    each(f, node, |f, prev, child| match child {
+        NodeOrToken::Token(tok) => {
+            if padded && tok.kind() == SyntaxKind::R_BRACE {
+                f.request(Sep::Space);
             }
-            NodeOrToken::Node(element) => {
-                if after_comma {
-                    f.request(Sep::Space);
-                }
-                format_node(f, &element);
-                after_comma = false;
+            f.token(&tok);
+            // Requested *after* writing, so that it also holds a comment off
+            // the brace.
+            if padded && tok.kind() == SyntaxKind::L_BRACE {
+                f.request(Sep::Space);
             }
         }
-    }
+        NodeOrToken::Node(element) => {
+            if prev == Some(SyntaxKind::COMMA) {
+                f.request(Sep::Space);
+            }
+            format_node(f, &element);
+        }
+    });
 }
 
 /// `abool: true` -- the colon attaches to the member name, the value is spaced
 /// off it.
 fn struct_kv(f: &mut Formatter, node: &SyntaxNode) {
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) => {
-                f.token(&tok);
-                if tok.kind() == SyntaxKind::COLON {
-                    f.request(Sep::Space);
-                }
-            }
-            NodeOrToken::Node(value) => format_node(f, &value),
+    each(f, node, |f, _, child| {
+        let colon = child.kind() == SyntaxKind::COLON;
+        element(f, child);
+        if colon {
+            f.request(Sep::Space);
         }
-    }
+    });
 }
 
 /// The braced-body layout applied to parentheses: `(` ends the line, elements
@@ -647,42 +552,39 @@ fn broken_list(f: &mut Formatter, node: &SyntaxNode) {
     // parameter list is the caller's business, not this rule's.
     let outer = f.allow_blank_lines(false);
 
-    for child in node.children_with_tokens() {
-        match child {
-            NodeOrToken::Token(tok) if tok.kind().is_trivia() => f.trivia(&tok),
-            NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::L_PAREN => {
-                f.token(&tok);
-                f.indent();
-                f.settle_width();
-                f.open_alignment_scope();
-            }
-            NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::R_PAREN => {
-                f.close_alignment_scope();
-                f.dedent();
-                f.pin(Sep::Newline);
-                f.token(&tok);
-            }
-            // `#` and each `,` attach to what precedes them.
-            NodeOrToken::Token(tok) => f.token(&tok),
-            NodeOrToken::Node(element) => {
-                f.request(Sep::Newline);
-                f.begin_row(if element.kind() == SyntaxKind::PARAM_DEF_ELEM {
-                    RowFamily::ParameterDefinition
-                } else {
-                    RowFamily::Other
-                });
-                format_node(f, &element);
-                f.end_row();
-            }
+    each(f, node, |f, _, child| match child {
+        NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::L_PAREN => {
+            f.token(&tok);
+            f.indent();
+            f.settle_width();
+            f.open_alignment_scope();
         }
-    }
+        NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::R_PAREN => {
+            f.close_alignment_scope();
+            f.dedent();
+            f.pin(Sep::Newline);
+            f.token(&tok);
+        }
+        // `#` and each `,` attach to what precedes them.
+        NodeOrToken::Token(tok) => f.token(&tok),
+        NodeOrToken::Node(element) => {
+            f.request(Sep::Newline);
+            f.begin_row(if element.kind() == SyntaxKind::PARAM_DEF_ELEM {
+                RowFamily::ParameterDefinition
+            } else {
+                RowFamily::Other
+            });
+            format_node(f, &element);
+            f.end_row();
+        }
+    });
 
     f.allow_blank_lines(outer);
 }
 
-/// What a `rdlfmt:` marker asks for.
+/// What a `rdlfmt:` marker comment asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Marker {
+enum Suppression {
     /// Reproduce statements verbatim from here to the end of the body.
     Off,
     /// Resume formatting.
@@ -691,45 +593,44 @@ enum Marker {
     Skip,
 }
 
-/// The marker a statement's leading trivia carries, if any.
-fn suppression(item: &SyntaxNode) -> Option<Marker> {
-    crate::formatter::leading_trivia(item)
-        .filter(|tok| tok.kind().is_comment())
-        .filter_map(|tok| marker(tok.text()))
-        .last()
-}
-
-/// Parses one comment's text as a marker.
-fn marker(text: &str) -> Option<Marker> {
-    match text
-        .strip_prefix("//")?
-        .trim()
-        .strip_prefix("rdlfmt:")?
-        .trim()
-    {
-        "off" => Some(Marker::Off),
-        "on" => Some(Marker::On),
-        "skip" => Some(Marker::Skip),
-        _ => None,
+impl Suppression {
+    /// Parses one comment's text as a marker.
+    fn parse(comment: &str) -> Option<Suppression> {
+        match comment
+            .strip_prefix("//")?
+            .trim()
+            .strip_prefix("rdlfmt:")?
+            .trim()
+        {
+            "off" => Some(Suppression::Off),
+            "on" => Some(Suppression::On),
+            "skip" => Some(Suppression::Skip),
+            _ => None,
+        }
     }
 }
 
-/// Whether `item` is reproduced verbatim, applying any marker it carries to
-/// `region` -- the suppression state of the statement sequence it belongs to.
+/// Whether `item` is reproduced verbatim, applying the last marker in its
+/// leading trivia to `region` -- the suppression state of the statement
+/// sequence it belongs to.
 fn is_suppressed(region: &mut bool, item: &SyntaxNode) -> bool {
-    match suppression(item) {
-        Some(Marker::Off) => *region = true,
-        Some(Marker::On) => *region = false,
+    let marker = leading_trivia(item)
+        .filter(|tok| tok.kind().is_comment())
+        .filter_map(|tok| Suppression::parse(tok.text()))
+        .last();
+    match marker {
+        Some(Suppression::Off) => *region = true,
+        Some(Suppression::On) => *region = false,
         // Governs one statement without disturbing the region around it, so a
         // `skip` inside an `off` block is merely redundant.
-        Some(Marker::Skip) => return true,
+        Some(Suppression::Skip) => return true,
         None => {}
     }
     *region
 }
 
-fn is_terminator(tok: &SyntaxToken) -> bool {
-    matches!(tok.kind(), SyntaxKind::SEMICOLON | SyntaxKind::COMMA)
+fn is_terminator(kind: SyntaxKind) -> bool {
+    matches!(kind, SyntaxKind::SEMICOLON | SyntaxKind::COMMA)
 }
 
 fn is_suffix(kind: SyntaxKind) -> bool {
@@ -744,12 +645,11 @@ fn is_suffix(kind: SyntaxKind) -> bool {
 /// Comments count as content. `addrmap a { /* later */ };` keeps its shape,
 /// because collapsing it would put a comment somewhere it was not written.
 fn is_empty(node: &SyntaxNode) -> bool {
-    node.children_with_tokens().all(|child| match child {
-        NodeOrToken::Node(_) => false,
-        NodeOrToken::Token(tok) => matches!(
-            tok.kind(),
+    node.children_with_tokens().all(|child| {
+        matches!(
+            child.kind(),
             SyntaxKind::WHITESPACE | SyntaxKind::L_BRACE | SyntaxKind::R_BRACE
-        ),
+        )
     })
 }
 
@@ -761,30 +661,18 @@ fn is_empty(node: &SyntaxNode) -> bool {
 /// makes the rule idempotent, since the output it produces is an input it
 /// recognises.
 fn shares_line_with(item: &SyntaxNode, prev: Option<&SyntaxNode>) -> bool {
-    prev.is_some_and(|prev| is_sw_or_hw(prev) && is_sw_or_hw(item) && !preceded_by_newline(item))
+    prev.is_some_and(|prev| {
+        is_sw_or_hw(prev)
+            && is_sw_or_hw(item)
+            && !leading_trivia(item).any(|tok| tok.text().contains('\n'))
+    })
 }
 
 /// A `sw = ...` or `hw = ...` assignment, and not `default sw = ...`, which
 /// leads with a keyword and reads as a statement of its own.
 fn is_sw_or_hw(node: &SyntaxNode) -> bool {
     node.kind() == SyntaxKind::LOCAL_PROPERTY_ASSIGNMENT
-        && first_significant(node)
+        && tokens(node)
+            .find(|tok| !tok.kind().is_trivia())
             .is_some_and(|tok| matches!(tok.kind(), SyntaxKind::SW_KW | SyntaxKind::HW_KW))
-}
-
-fn first_significant(node: &SyntaxNode) -> Option<SyntaxToken> {
-    tokens_of(node).find(|tok| !tok.kind().is_trivia())
-}
-
-/// Whether the author put a line break in front of `node`.
-fn preceded_by_newline(node: &SyntaxNode) -> bool {
-    tokens_of(node)
-        .take_while(|tok| tok.kind().is_trivia())
-        .any(|tok| tok.text().contains('\n'))
-}
-
-fn tokens_of(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
-    let end = node.text_range().end();
-    std::iter::successors(node.first_token(), |tok: &SyntaxToken| tok.next_token())
-        .take_while(move |tok| tok.text_range().end() <= end)
 }
