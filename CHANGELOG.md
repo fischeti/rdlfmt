@@ -7,9 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-02
+
 ### Removed
 
 - The `peakrdl fmt` convenience plugin. Use `rdlfmt` directly.
+
+### Fixed
+
+- Deeply nested input, such as thousands of nested parentheses or bodies, is
+  refused like any other input that does not parse, instead of overflowing
+  the stack. Nesting is bounded at 256 levels.
+- A `` `define `` whose last line ends in a backslash followed by a blank line
+  is no longer refused.
+- Trailing whitespace after a line comment is dropped.
+- A body holding only block comments, as in `addrmap a { /* later */ };`,
+  stays on one line, and an empty body after a comment collapses to `{}`.
+- A `;` or `,` attaches to a block comment before it: `D = 3 /* d */;` no
+  longer gains a space before the `;`.
+- Trailing comments line up in one column even when a row has fewer cells
+  than its neighbours.
+- A block comment in the middle of a row is aligned as part of its cell
+  rather than as a trailing comment.
+- A block comment that a line break moves down to lead the next line is no
+  longer aligned with the line above, which left trailing whitespace and
+  made formatting not idempotent.
 
 ## [0.3.0] - 2026-08-27
 
@@ -92,7 +114,8 @@ First release.
   lossless rowan CST underneath. The CLI dependencies sit behind the default
   `cli` feature, so library users can turn them off.
 
-[Unreleased]: https://github.com/fischeti/rdlfmt/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/fischeti/rdlfmt/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/fischeti/rdlfmt/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/fischeti/rdlfmt/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/fischeti/rdlfmt/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/fischeti/rdlfmt/compare/v0.1.0...v0.1.1
