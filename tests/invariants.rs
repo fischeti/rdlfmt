@@ -1090,6 +1090,19 @@ fn a_comment_inside_a_row_is_not_trailing() {
     );
 }
 
+/// The comment column is where the code ends on the longest line, however many
+/// cells each line has before it.
+#[test]
+fn trailing_comments_line_up_across_rows_with_fewer_cells() {
+    let out = check(
+        "addrmap a {\n    r a @ 0x0; // one\n    r bbbbbb @ 0x1000; // two\n    r cc; // three\n};\n",
+    );
+    assert_eq!(
+        out,
+        "addrmap a {\n    r a      @ 0x0;    // one\n    r bbbbbb @ 0x1000; // two\n    r cc;              // three\n};\n"
+    );
+}
+
 /// A comment on the line *before* a statement is not in that statement's row,
 /// even though the parser hands it over as leading trivia. Treating it as one
 /// would decline every annotated instantiation in a file.
