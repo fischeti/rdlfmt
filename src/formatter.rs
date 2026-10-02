@@ -535,6 +535,16 @@ impl<'a> Formatter<'a> {
     /// author wrote is not the formatter's business.
     pub(crate) fn token(&mut self, tok: &SyntaxToken) {
         debug_assert!(!tok.kind().is_trivia(), "trivia must go through trivia()");
+        // A terminator attaches to a block comment as it would to code. The
+        // space a comment asks for after itself is only a floor -- no rule
+        // asks for one before a terminator -- so it gives way here, while a
+        // line break the author put after the comment does not.
+        if self.after_comment
+            && self.gap.sep == Sep::Space
+            && matches!(tok.kind(), SyntaxKind::SEMICOLON | SyntaxKind::COMMA)
+        {
+            self.gap.sep = Sep::None;
+        }
         self.materialize();
         for i in 0..self.row_stack.len() {
             self.start_row(self.row_stack[i]);
