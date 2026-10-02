@@ -75,14 +75,18 @@ pub(super) fn source_file(p: &mut Parser) {
 
 /// Parses items until `stop` (or end of input), guaranteeing forward progress.
 fn item_list(p: &mut Parser, stop: SyntaxKind) {
-    while !p.at(stop) && !p.at_end() {
-        let before = p.pos;
-        item(p);
-        if p.pos == before {
-            // No rule consumed anything; force progress so this cannot hang.
-            p.error_and_bump(format!("unexpected {:?}", p.current()));
+    // Each body is one level of nesting: this is where a component definition
+    // recurses into the items it holds.
+    p.nested(|p| {
+        while !p.at(stop) && !p.at_end() {
+            let before = p.pos;
+            item(p);
+            if p.pos == before {
+                // No rule consumed anything; force progress so this cannot hang.
+                p.error_and_bump(format!("unexpected {:?}", p.current()));
+            }
         }
-    }
+    });
 }
 
 //--------------------------------------------------------------------------
@@ -824,32 +828,51 @@ fn expr(p: &mut Parser) {
 /// in the tree by the time the operator is seen, so the enclosing
 /// `BINARY_EXPR` is inserted *retroactively* around it. Looping rather than
 /// recursing on the left gives left associativity.
+///
+/// Every expression nested inside another passes through here, so this is
+/// where expression nesting is bounded -- see [`Parser::nested`].
 fn expr_bp(p: &mut Parser, min_bp: u8) {
-    let cp = p.checkpoint();
-    unary_expr(p);
+    p.nested(|p| {
+        let cp = p.checkpoint();
+        unary_expr(p);
 
-    loop {
-        let kind = p.current();
-        // An operator that binds too loosely for this call is left for the
-        // caller to absorb, which is what `filter` folds in: both "not a
-        // binary operator" and "binds too loosely" mean the same thing here.
-        if let Some(bp) = binary_bp(kind).filter(|&bp| bp >= min_bp) {
-            p.start_node_at(cp, BINARY_EXPR);
-            p.bump();
-            expr_bp(p, bp + 1);
-            p.finish_node();
-        } else if kind == QUESTION && min_bp <= TERNARY_BP {
-            p.start_node_at(cp, TERNARY_EXPR);
-            p.bump();
-            expr_bp(p, 0);
-            p.expect(COLON);
-            // Same binding power on the right, which makes it right-associative.
-            expr_bp(p, TERNARY_BP);
-            p.finish_node();
-        } else {
-            break;
+        // Each operator wraps everything parsed so far one level deeper, so a
+        // long chain nests as deeply as one written out in parentheses, and
+        // counts the same.
+        let mut wraps = 0;
+        loop {
+            let kind = p.current();
+            // An operator that binds too loosely for this call is left for the
+            // caller to absorb, which is what `filter` folds in: both "not a
+            // binary operator" and "binds too loosely" mean the same thing here.
+            let binary = binary_bp(kind).filter(|&bp| bp >= min_bp);
+            let ternary = kind == QUESTION && min_bp <= TERNARY_BP;
+            if binary.is_none() && !ternary {
+                break;
+            }
+            wraps += 1;
+            if !p.enter() {
+                break;
+            }
+            if let Some(bp) = binary {
+                p.start_node_at(cp, BINARY_EXPR);
+                p.bump();
+                expr_bp(p, bp + 1);
+                p.finish_node();
+            } else {
+                p.start_node_at(cp, TERNARY_EXPR);
+                p.bump();
+                expr_bp(p, 0);
+                p.expect(COLON);
+                // Same binding power on the right, which makes it right-associative.
+                expr_bp(p, TERNARY_BP);
+                p.finish_node();
+            }
         }
-    }
+        for _ in 0..wraps {
+            p.leave();
+        }
+    });
 }
 
 fn unary_expr(p: &mut Parser) {
@@ -987,7 +1010,8 @@ fn concat_or_replicate(p: &mut Parser) {
     }
     expr(p);
     if p.at(L_BRACE) {
-        concat_or_replicate(p);
+        // Recurses without passing through `expr`, so it is bounded here.
+        p.nested(concat_or_replicate);
         p.expect(R_BRACE);
         p.start_node_at(cp, REPLICATE);
         p.finish_node();
