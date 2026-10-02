@@ -8,7 +8,7 @@ addrmap top {
 
     r a      @ 0x0;    // one
     r bbbbbb @ 0x1000; // two
-    r cc;       // three
+    r cc;              // three
 
     r x    @ 0x0;
     // interleaved comment

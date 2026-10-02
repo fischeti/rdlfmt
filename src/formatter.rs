@@ -771,8 +771,8 @@ impl<'a> Formatter<'a> {
             return;
         }
 
-        // Each column is padded independently, from widths measured before any
-        // padding, so the order they are visited in does not matter.
+        // Visited in `AlignPoint` order, which puts the trailing comment last:
+        // its column depends on the padding of every cell before it.
         let points: BTreeSet<AlignPoint> = run
             .iter()
             .flat_map(|&id| self.rows[id].markers.iter().map(|marker| marker.point))
@@ -807,7 +807,14 @@ impl<'a> Formatter<'a> {
 
         let widths: Vec<usize> = group
             .iter()
-            .map(|&(row_id, marker)| self.cell_width(&self.rows[row_id], marker))
+            .map(|&(row_id, marker)| {
+                let row = &self.rows[row_id];
+                if marker.point == AlignPoint::TrailingComment {
+                    self.line_width(row, marker, insertions)
+                } else {
+                    self.cell_width(row, marker)
+                }
+            })
             .collect();
         let maximum = widths.iter().copied().max().unwrap_or(0);
         let separator = usize::from(maximum > 0);
@@ -822,6 +829,21 @@ impl<'a> Formatter<'a> {
                     .or_insert(padding);
             }
         }
+    }
+
+    /// The width of `row` up to `marker`, with the padding already decided for
+    /// the cells in between.
+    ///
+    /// A trailing comment is measured this way rather than as a cell, because
+    /// rows may differ in how many cells come before it: what lines comments up
+    /// is the column the code ends at.
+    fn line_width(&self, row: &Row, marker: Marker, insertions: &BTreeMap<usize, usize>) -> usize {
+        let start = row.start.map_or(marker.pos, |start| start.byte);
+        self.out[start..marker.pos].chars().count()
+            + insertions
+                .range(start..marker.pos)
+                .map(|(_, n)| n)
+                .sum::<usize>()
     }
 
     fn cell_width(&self, row: &Row, marker: Marker) -> usize {
