@@ -617,8 +617,9 @@ impl<'a> Formatter<'a> {
                     self.request(Sep::Space);
                 }
                 // A trailing comment belongs to the physical code line, even
-                // when rowan handed its trivia to the following CST node.
-                if inline {
+                // when rowan handed its trivia to the following CST node --
+                // unless a break the rule asked for moves it to the next line.
+                if inline && self.gap.sep != Sep::Newline {
                     self.attach_trailing_comment();
                 }
                 self.write_raw(tok.text());

@@ -75,6 +75,14 @@ fn check(src: &str) -> String {
         "formatting changed the directives\n--- input ---\n{src}\n--- output ---\n{out}"
     );
 
+    for line in out.lines() {
+        assert_eq!(
+            line,
+            line.trim_end(),
+            "trailing whitespace\n--- input ---\n{src}\n--- output ---\n{out}"
+        );
+    }
+
     let again = format(&out).expect("formatted output should parse cleanly");
     assert_eq!(
         out, again,
@@ -229,6 +237,20 @@ fn no_trailing_whitespace_on_any_line() {
     for line in out.lines() {
         assert_eq!(line, line.trim_end(), "trailing whitespace in:\n{out}");
     }
+}
+
+/// A block comment written after a comma moves down with the element it
+/// precedes, and so is no trailing comment of the line it left: aligning it as
+/// one would pad the end of that line.
+#[test]
+fn a_comment_that_moves_down_is_not_padded_as_trailing() {
+    let out = check(
+        "reg r #(longint unsigned W = 32, // w\n    boolean S = true, /* c */ string N) {};\n",
+    );
+    assert_eq!(
+        out,
+        "reg r #(\n    longint unsigned W = 32, // w\n    boolean          S = true,\n    /* c */ string N\n) {};\n"
+    );
 }
 
 //--------------------------------------------------------------------------
