@@ -305,6 +305,25 @@ fn body_holding_only_a_comment_still_breaks() {
 }
 
 #[test]
+fn body_holding_only_an_inline_block_comment_stays_on_its_line() {
+    let out = check("addrmap a { /* later */ };\n");
+    assert_eq!(out, "addrmap a { /* later */ };\n");
+    let out = check("reg {  /* a */   /* b */} r;\n");
+    assert_eq!(out, "reg { /* a */ /* b */ } r;\n");
+    // A comment in front of the brace is not inside the body.
+    let out = check("addrmap a /* x */ {};\n");
+    assert_eq!(out, "addrmap a /* x */ {};\n");
+}
+
+#[test]
+fn body_holding_only_a_block_comment_keeps_the_authors_line_break() {
+    let out = check("addrmap a { /* later */\n};\n");
+    assert_eq!(out, "addrmap a { /* later */\n};\n");
+    let out = check("addrmap a { /* one\n   two */ };\n");
+    assert_eq!(out, "addrmap a { /* one\n   two */\n};\n");
+}
+
+#[test]
 fn comment_written_beside_the_opening_brace_stays_beside_it() {
     // The general trivia rule decides this, and decides it correctly: the
     // comment did not follow a newline, so it annotates the brace it trails.

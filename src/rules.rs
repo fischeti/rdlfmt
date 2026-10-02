@@ -208,16 +208,33 @@ fn braced_body(f: &mut Formatter, node: &SyntaxNode) {
     // may not abut the name in front of it.
     f.request(Sep::Space);
 
-    if is_empty(node) {
+    if is_flat(node) {
         // Whitespace between the braces is dropped rather than routed through
-        // `trivia`: with nothing between `{` and `}` to separate, there is
-        // nothing for it to say.
+        // `trivia`: all it could say is where a line breaks, and `is_flat`
+        // has already ruled that out wherever there is anything to separate.
+        let mut inside = false;
+        let mut padded = false;
         for tok in node
             .children_with_tokens()
             .filter_map(NodeOrToken::into_token)
         {
-            if !tok.kind().is_trivia() {
-                f.token(&tok);
+            match tok.kind() {
+                // What comes before the brace is the owning statement's.
+                _ if !inside && tok.kind().is_trivia() => f.trivia(&tok),
+                SyntaxKind::L_BRACE => {
+                    f.token(&tok);
+                    inside = true;
+                }
+                SyntaxKind::WHITESPACE => {}
+                SyntaxKind::BLOCK_COMMENT => {
+                    f.trivia(&tok);
+                    padded = true;
+                }
+                SyntaxKind::R_BRACE if padded => {
+                    f.request(Sep::Space);
+                    f.token(&tok);
+                }
+                _ => f.token(&tok),
             }
         }
         return;
@@ -640,17 +657,33 @@ fn is_suffix(kind: SyntaxKind) -> bool {
     )
 }
 
-/// Whether a braced node holds nothing worth breaking for.
+/// Whether a braced node holds nothing worth breaking for: no items, and no
+/// comment that needs a line break.
 ///
-/// Comments count as content. `addrmap a { /* later */ };` keeps its shape,
-/// because collapsing it would put a comment somewhere it was not written.
-fn is_empty(node: &SyntaxNode) -> bool {
-    node.children_with_tokens().all(|child| {
-        matches!(
-            child.kind(),
-            SyntaxKind::WHITESPACE | SyntaxKind::L_BRACE | SyntaxKind::R_BRACE
-        )
-    })
+/// An empty body collapses to `{}` however many lines it spanned. One holding
+/// only block comments keeps its shape: `addrmap a { /* later */ };` stays on
+/// one line, but if the author broke a line in there, it stays broken -- moving
+/// the comment would put it somewhere it was not written.
+fn is_flat(node: &SyntaxNode) -> bool {
+    let mut comments = false;
+    let mut newline = false;
+    let inside = node
+        .children_with_tokens()
+        .skip_while(|child| child.kind() != SyntaxKind::L_BRACE);
+    for child in inside {
+        match child.kind() {
+            SyntaxKind::L_BRACE | SyntaxKind::R_BRACE => {}
+            SyntaxKind::WHITESPACE => {
+                newline |= child.to_string().contains('\n');
+            }
+            SyntaxKind::BLOCK_COMMENT => {
+                comments = true;
+                newline |= child.to_string().contains('\n');
+            }
+            _ => return false,
+        }
+    }
+    !(comments && newline)
 }
 
 /// The style guide's one exception to a statement per line: `sw` and `hw` may
