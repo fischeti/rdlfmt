@@ -256,6 +256,14 @@ fn no_trailing_whitespace_on_any_line() {
     }
 }
 
+#[test]
+fn trailing_whitespace_inside_a_line_comment_is_dropped() {
+    let out = check("addrmap a {}; // c \t \n// d  \n");
+    assert_eq!(out, "addrmap a {}; // c\n// d\n");
+    let out = check("addrmap a {}; // c  \r\n");
+    assert_eq!(out, "addrmap a {}; // c\r\n");
+}
+
 /// A block comment written after a comma moves down with the element it
 /// precedes, and so is no trailing comment of the line it left: aligning it as
 /// one would pad the end of that line.

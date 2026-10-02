@@ -632,7 +632,13 @@ impl<'a> Formatter<'a> {
                 if inline && self.gap.sep != Sep::Newline {
                     self.attach_trailing_comment();
                 }
-                self.write_raw(tok.text());
+                if kind == SyntaxKind::LINE_COMMENT {
+                    // A line comment runs to the end of its line, so spaces at
+                    // the end of it are trailing whitespace like any other.
+                    self.write_raw(tok.text().trim_end());
+                } else {
+                    self.write_raw(tok.text());
+                }
                 if kind == SyntaxKind::LINE_COMMENT {
                     // A line comment swallows the rest of its line, so anything
                     // after it *must* start a new one. Getting this wrong
