@@ -5,46 +5,30 @@
 //!     |
 //!     v  syntax              lossless CST, comments and all
 //!     v  rules               one function per node kind
-//!     v  formatter           annotated output and alignment
-//!     v  String              final rendering
+//!     v  formatter           whitespace, then alignment
+//!     v  String
 //! ```
 //!
-//! # A deliberately small intermediate representation
+//! # No document IR
 //!
-//! Pretty-printers usually build a document IR (Wadler groups, Oppen's
-//! algorithm) because their layout decisions depend on rendered width: whether
-//! a list fits on one line cannot be known until everything inside it has been
-//! laid out, so the decision has to be deferred and the alternatives measured.
-//!
-//! None of the *line breaking* rules here are width-dependent. Following the PeakRDL style
-//! guide, braces always break, statements are one per line, expressions never
-//! break, and a parenthesised list breaks when it holds more than one element.
-//! Every one of those is decidable from the tree alone, before a single
-//! character is written, so this formatter does not need groups, alternatives,
-//! or a fitting algorithm.
-//!
-//! Column alignment does need hindsight. The formatter therefore retains a
-//! narrow IR over its ordinary output: semantic row and cell boundaries grouped
-//! into list-local scopes. Once every newline is final, an alignment pass
-//! measures adjacent one-line rows and inserts padding before the String is
-//! returned. Padding never feeds back into layout.
+//! Pretty-printers usually build a document IR (Wadler, Oppen) because their
+//! line breaks depend on rendered width. None here do: following the PeakRDL
+//! style guide, braces always break, statements are one per line, expressions
+//! never break, and a parameter list breaks when it holds more than one
+//! element. All of that is decidable from the tree alone. Only column
+//! alignment needs hindsight, and it runs once every line break is final.
 //!
 //! # What the formatter will not do
 //!
-//! Reformat a file the parser did not fully understand. [`format()`] returns
-//! [`FormatError`] when the parse reports errors, because the rules assume a
-//! tree shape that error recovery does not guarantee, and rewriting a file
+//! Reformat a file the parser did not fully understand: [`format()`] returns
+//! [`FormatError`] when the parse reports errors, because rewriting a file
 //! whose structure was guessed at is how a formatter corrupts code.
 //!
-//! Preprocessor directives need no separate rule against them, which is the
-//! point of treating even the conditionals as trivia: a `` `ifdef `` whose
-//! branches hand a brace back and forth leaves the braces unbalanced, and so is
-//! refused by the same check as any other input the parser could not follow.
-//! Everything else formats like a comment -- its own line, payload untouched --
-//! except that a branching directive is left-aligned rather than indented with
-//! the code around it, having no place in the brace hierarchy. See the docs in
-//! [`crate::syntax::parser`] for why ignoring a conditional cannot corrupt
-//! the file.
+//! Preprocessor directives, conditionals included, are trivia: each keeps its
+//! own line, and a conditional is flush left. A `` `ifdef `` whose branches
+//! trade a brace leaves the braces unbalanced, and so is refused like any other
+//! parse error. See [`crate::syntax::parser`] for why ignoring a conditional
+//! cannot corrupt the file.
 
 pub mod syntax;
 
@@ -60,10 +44,8 @@ pub enum FormatError {
     /// The input did not parse. Formatting is refused rather than attempted:
     /// the rules assume a tree shape that error recovery does not guarantee.
     Parse(Vec<ParseError>),
-    /// Formatting would have changed the code, not just its layout.
-    ///
-    /// Always a bug in this crate, never something the input can cause. The
-    /// output is withheld so that the bug cannot reach a file.
+    /// Formatting would have changed the code, not just its layout. Always a
+    /// bug in this crate; the output is withheld so it cannot reach a file.
     Corrupted(String),
 }
 
@@ -103,25 +85,18 @@ impl std::error::Error for FormatError {}
 
 /// Formats SystemRDL source.
 ///
-/// There is nothing to configure, deliberately: a formatter earns its value by
-/// ending arguments, not by relocating them into a config file. Indentation is
-/// four spaces, which is what the PeakRDL style guide asks for.
+/// There is nothing to configure, deliberately. Indentation is four spaces,
+/// as the PeakRDL style guide asks for.
 ///
-/// A `// rdlfmt: off` comment suppresses formatting for the statements that
-/// follow it, until a `// rdlfmt: on` or the end of the enclosing body; a
-/// `// rdlfmt: skip` covers the single statement below it. That is an opt-out
-/// for one passage rather than a setting -- it travels with the code it
-/// applies to, and says only that a passage is already the way its author
-/// wants it.
+/// A `// rdlfmt: off` comment leaves the statements after it as written, until
+/// a `// rdlfmt: on` or the end of the enclosing body; `// rdlfmt: skip` does
+/// the same for the one statement below it.
 ///
-/// The output is verified before it is returned: see `verify`. A caller that
-/// gets `Ok` has a guarantee, not just a hope, that only whitespace moved.
+/// The output is checked before it is returned: `Ok` guarantees that only
+/// whitespace moved.
 ///
 /// # Errors
-/// [`FormatError::Parse`] if `src` does not parse cleanly. The source is left
-/// for the caller to report on rather than being passed through unchanged, so
-/// that a broken file is never silently mistaken for a formatted one.
-///
+/// [`FormatError::Parse`] if `src` does not parse cleanly, and
 /// [`FormatError::Corrupted`] if the formatter has a bug.
 pub fn format(src: &str) -> Result<String, FormatError> {
     let parsed = parse(src);
@@ -137,21 +112,16 @@ pub fn format(src: &str) -> Result<String, FormatError> {
     Ok(out)
 }
 
-/// Checks that formatting moved nothing but whitespace.
+/// Checks that formatting moved nothing but whitespace: the output lexes to the
+/// same tokens, comments and directives included, and keeps its line endings.
 ///
-/// The test suite asserts this over the inputs someone thought to write down.
-/// Doing it here instead makes it hold for every input there will ever be,
-/// which is what justifies a tool that overwrites source files by default. The
-/// cost is one extra lex of the output -- nothing next to the parse that
-/// produced it.
+/// Checking here rather than only in tests is what makes it safe for the CLI to
+/// overwrite files by default. It costs one extra lex of the output.
 ///
-/// Comments are compared alongside the code, trimmed at the end, because a
-/// dropped comment is a real loss even though it changes no behaviour. The
-/// trim is what lets the formatter tidy trailing spaces inside one.
+/// Comments and directives are compared trimmed at the end, which lets the
+/// formatter drop trailing spaces in them.
 fn verify(src: &str, out: &str) -> Result<(), FormatError> {
-    // Checked separately because the token comparison below cannot see it: line
-    // endings live inside the whitespace this function filters out, so silently
-    // rewriting every one of them would pass the check that follows.
+    // The token comparison below ignores whitespace, so it cannot see these.
     let (want, got) = (line_ending(src), line_ending(out));
     if want != got {
         return Err(FormatError::Corrupted(format!(

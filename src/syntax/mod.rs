@@ -10,10 +10,8 @@
 //!     v  rowan              lossless CST: tree.to_string() == source
 //! ```
 //!
-//! The defining property is that last one. Unlike an abstract syntax tree,
-//! which throws away whitespace and comments because they carry no meaning,
-//! every byte of the input is present in this tree as a token. A formatter
-//! needs that: it has to decide where to put a comment, not delete it.
+//! Unlike an abstract syntax tree, it keeps every byte of the input,
+//! whitespace and comments included, because a formatter has to place them.
 
 pub mod kind;
 pub mod lexer;

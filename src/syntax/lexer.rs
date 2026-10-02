@@ -1,47 +1,23 @@
 //! Turning source text into a flat token stream.
 //!
-//! The one property that matters here: **nothing is discarded**. Concatenating
-//! the text of every token this module produces reproduces the input byte for
-//! byte, including whitespace, comments, and bytes that failed to lex. That is
-//! what makes the lossless syntax tree possible downstream, and it is enforced
-//! by the round-trip tests.
+//! Nothing is discarded: the tokens' text concatenates back to the input byte
+//! for byte, including bytes that failed to lex.
 
 use crate::syntax::kind::SyntaxKind;
 use logos::Logos;
 use rowan::{TextRange, TextSize};
 
-/// A single token: what it is and where it came from.
-///
-/// Deliberately small and `Copy` -- one of these exists per token in the file,
-/// so the whole stream is a flat array of 12-byte records. The text is *not*
-/// stored: it is exactly `&src[range]`, so keeping it would be a redundant
-/// 16 bytes and a second copy of an invariant that could drift.
-///
-/// Offsets are rowan's [`TextSize`] (a `u32`) rather than `usize`, both to
-/// halve their size and because that is the type rowan itself uses -- storing
-/// `usize` here would only mean converting at every tree and diagnostic
-/// boundary. They are also what diagnostics need, so a `&str` here would not
-/// remove the need for offsets, only make them harder to recover.
-///
-/// A bare `LexedToken` cannot yield its text; that requires the source it came
-/// from, so text lives on [`Lexed`], which owns both.
+/// A single token: its kind and byte range. Its text is `&src[range]`, which
+/// [`Lexed`] provides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LexedToken {
     pub kind: SyntaxKind,
     pub range: TextRange,
 }
 
-/// A token stream together with the source it was lexed from.
-///
-/// Pairing them once is what makes the "same string" precondition of a
-/// `token.text(src)` free function unrepresentable: every accessor here is
-/// indexed by token position, and the text it returns is by construction a
-/// slice of the right string.
-///
-/// Note that [`Lexed::text`] returns `&'a str`, borrowed from the source
-/// rather than from `self`. Callers can therefore hold token text across
-/// mutations of whatever else they own -- which is exactly what the parser
-/// needs when feeding a token into a tree builder it holds mutably.
+/// A token stream together with the source it was lexed from, so token text
+/// always comes from the right string. Text is borrowed from the source, not
+/// from `self`.
 #[derive(Debug, Clone)]
 pub struct Lexed<'a> {
     src: &'a str,
@@ -62,11 +38,8 @@ impl<'a> Lexed<'a> {
         self.tokens.is_empty()
     }
 
-    /// The kind of token `i`, or [`SyntaxKind::EOF`] past the end.
-    ///
-    /// Treating the end of input as a kind rather than as `None` removes a
-    /// bounds check from every lookahead in the parser. It cannot be mistaken
-    /// for a real token: [`lex`] never produces `EOF`.
+    /// The kind of token `i`, or [`SyntaxKind::EOF`] past the end, which spares
+    /// the parser a bounds check on every lookahead.
     pub fn kind(&self, i: usize) -> SyntaxKind {
         self.tokens.get(i).map_or(SyntaxKind::EOF, |t| t.kind)
     }
@@ -109,10 +82,7 @@ impl<'a> Lexed<'a> {
 pub fn lex(src: &str) -> Lexed<'_> {
     let src_len = u32::try_from(src.len()).expect("source larger than 4 GiB");
 
-    // A guess, not a bound: measured token density ranges from ~1 byte/token
-    // for dense punctuation to ~22 for comment-heavy input, so no divisor is
-    // right for every file. This one just trims a few reallocs on typical
-    // input; being wrong either way costs nothing but a regrow.
+    // A guess at token density, to save a few reallocations.
     let mut out: Vec<LexedToken> = Vec::with_capacity(src.len() / 4);
     let mut lexer = SyntaxKind::lexer(src);
 
@@ -128,9 +98,8 @@ pub fn lex(src: &str) -> Lexed<'_> {
         let kind = match result {
             Ok(kind) => kind,
             Err(()) => {
-                // Unrecognised bytes. logos reports these one chunk at a time;
-                // fold a run of them into a single token so that a stretch of
-                // garbage surfaces as one error rather than a dozen.
+                // Fold a run of unrecognised bytes into one token, so it is
+                // reported as one error.
                 if let Some(last) = out.last_mut()
                     && last.kind == SyntaxKind::LEX_ERROR
                     && last.range.end() == range.start()

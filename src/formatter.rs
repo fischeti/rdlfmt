@@ -2,64 +2,46 @@
 //!
 //! # Separation is requested, not written
 //!
-//! No rule ever writes a space or a newline. Instead it *requests* a minimum
-//! separation before whatever is written next, and the request is materialised
-//! lazily when that next thing actually arrives. Requests combine by [`Ord`]:
-//! the strongest one wins.
+//! No rule writes a space or a newline. A rule *requests* a minimum separation
+//! before whatever is written next, and the request is materialised when that
+//! next thing arrives. Requests combine by [`Ord::max`], so the strongest wins.
 //!
-//! Everything said about the space between two things accumulates in one value,
-//! the [`Gap`], which is spent and reset the moment something is written. That
-//! is the whole of the mutable whitespace state: a rule can only speak about
-//! the gap now open, and nothing it says can outlive it.
+//! Everything said about the space between two things accumulates in one
+//! [`Gap`], which is spent and reset when something is written. Two properties
+//! follow:
 //!
-//! Two properties fall out of this, both of which are otherwise fiddly:
-//!
-//! * **No trailing whitespace, ever.** A separation that is never followed by
-//!   content is never written, so a request left pending at the end of a line
-//!   or of the file simply evaporates.
-//! * **Indentation needs no bookkeeping at the call site.** It is emitted as
-//!   part of materialising a newline, so a rule that opens an indent level
-//!   does not have to know which of its children begins a line.
-//!
-//! It also gives the two producers of separation -- layout rules and preserved
-//! trivia -- a way to disagree without either having to know about the other.
-//! A blank line in the source and a rule asking for a plain newline resolve to
-//! a blank line without the rule being consulted.
+//! * **No trailing whitespace.** A separation that is never followed by content
+//!   is never written.
+//! * **Indentation needs no bookkeeping at the call site.** It is written as
+//!   part of a newline, so a rule that indents does not need to know which of
+//!   its children begins a line.
 //!
 //! # Whitespace is discarded, its signal is not
 //!
-//! Source `WHITESPACE` tokens are never copied to the output; the formatter
-//! regenerates all of it. The one thing they carry that cannot be recomputed is
-//! whether the author left a blank line, so that -- and only that -- is lifted
-//! out before the token is dropped.
+//! Source whitespace is never copied; the formatter regenerates all of it. The
+//! one thing it carries that cannot be recomputed is whether the author left a
+//! blank line, which is kept as the gap's [`Width`]. Whether a gap breaks the
+//! line is the rule's decision; a blank line only widens a break the rule
+//! already asked for. That is why `addrmap top` and a `{` written two lines
+//! below it still end up on one line.
 //!
-//! It is lifted out as the gap's [`Width`] rather than as a separation in its
-//! own right, because a blank line is a bigger line break and not something
-//! that can stand where there was to be no break at all. Whether a gap is a
-//! break is the enclosing rule's decision; the author's blank line only says
-//! how wide it should be once the rule has decided on one. That is what keeps
-//! `addrmap top` and a `{` written two lines below it on one line: the gap in
-//! front of a brace is a space however many newlines were typed into it.
+//! # Alignment
 //!
-//! Where a break *is* the author's to widen is a separate question -- policy
-//! for a whole region rather than state of one gap -- and the one thing here
-//! that outlives a gap. See [`Formatter::allow_blank_lines`].
+//! Column alignment is the one decision that needs hindsight. As rules write,
+//! they mark rows and the cell boundaries within them; once every newline is
+//! final, [`Formatter::align`] pads adjacent one-line rows of the same kind.
+//! Padding never feeds back into layout.
 
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use rowan::TextSize;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Spaces per indentation level, as the PeakRDL style guide asks for.
-///
-/// A constant rather than an option: an indent width is the kind of setting
-/// that exists only to be argued over, and every file the formatter touches
-/// having the same one is the point of running it.
 const INDENT_WIDTH: usize = 4;
 
 /// The minimum separation required before the next thing written.
 ///
-/// Variant order is load-bearing: requests combine with [`Ord::max`], so a
-/// stronger request always survives a weaker one regardless of arrival order.
+/// Variant order matters: requests combine with [`Ord::max`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Sep {
     /// Tokens abut: `8'hA5`, `foo[`.
@@ -73,14 +55,9 @@ pub(crate) enum Sep {
 
 /// How wide the gap should be *if* it turns out to be a line break.
 ///
-/// The second axis of a gap, and deliberately not part of the [`Sep`] lattice:
-/// a blank line is a bigger break, not a break in its own right, so it can only
-/// widen a break someone else decided on. Ordering it above [`Sep::Newline`]
-/// and taking the max would let a blank line typed in front of a `{` strand the
-/// brace on a line of its own.
-///
-/// Three states rather than a pair of flags, because two booleans would admit a
-/// fourth that means nothing.
+/// Kept apart from [`Sep`] because a blank line can only widen a break, never
+/// create one: ordering it above `Sep::Newline` would let a blank line in front
+/// of a `{` strand the brace on a line of its own.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum Width {
     /// Nobody has spoken for it. A blank line in the source still can.
@@ -93,21 +70,14 @@ enum Width {
 }
 
 /// The separation accumulating in front of whatever is written next.
-///
-/// One value with one lifetime: it is built up by requests and by the author's
-/// whitespace, spent by [`Formatter::materialize`], and reset there -- which is
-/// what keeps a decision about one gap from leaking into the next without
-/// anyone having to clear a flag by hand.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Gap {
     sep: Sep,
     width: Width,
 }
 
-/// A kind of physical row that may participate in an aligned run.
-///
-/// `Other` is deliberately represented too: a statement which cannot be a row
-/// is still a boundary between the rows on either side of it.
+/// The kind of statement a row holds. Only rows of the same family align with
+/// each other; an `Other` row ends any run it interrupts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RowFamily {
     Instantiation,
@@ -116,11 +86,8 @@ pub(crate) enum RowFamily {
     Other,
 }
 
-/// The right edge of a semantic cell.
-///
-/// The value names the thing that follows the cell. Keeping the names semantic
-/// rather than numbering columns lets a row omit a later cell without shifting
-/// everything after it into the wrong column.
+/// The right edge of a cell, named after what follows it. Naming rather than
+/// numbering the columns lets a row omit a cell without shifting the rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum AlignPoint {
     InstType,
@@ -139,15 +106,12 @@ pub(crate) enum AlignPoint {
 struct Marker {
     point: AlignPoint,
     pos: usize,
-    /// Whether the ordinary formatter already put a separating space here.
+    /// Whether a space was already written here.
     base_space: bool,
 }
 
 /// A place in the output, with the facts about its line that alignment needs.
-///
-/// Recorded as the output is written rather than recovered from it later:
-/// `out` only ever grows until [`Formatter::align`], so what was true of a
-/// position when it was reached is still true then.
+/// `out` only grows until [`Formatter::align`], so they stay true until then.
 #[derive(Debug, Clone, Copy)]
 struct Pos {
     byte: usize,
@@ -161,19 +125,19 @@ struct Pos {
 struct Row {
     family: RowFamily,
     scope: usize,
-    /// Where the first token or cell boundary landed. Leading trivia is
-    /// allowed to arrive after [`Formatter::begin_row`], so this is set late.
+    /// Where the first token or cell boundary landed. Set late, because leading
+    /// trivia arrives after [`Formatter::begin_row`].
     start: Option<Pos>,
     end: Option<Pos>,
     markers: Vec<Marker>,
-    /// Whether a blank line or a directive separates this row from the
-    /// previous row of its scope, which ends any aligned run between them.
+    /// Whether a blank line or a directive separates this row from the previous
+    /// row of its scope.
     after_break: bool,
 }
 
 impl Row {
-    /// Whether the row can join an aligned run: a single line of its own,
-    /// with at least one cell boundary to align.
+    /// Whether the row can join an aligned run: a line of its own, with at
+    /// least one cell boundary.
     fn alignable(&self) -> bool {
         self.family != RowFamily::Other
             && !self.markers.is_empty()
@@ -184,11 +148,12 @@ impl Row {
     }
 }
 
+/// The rows of one body or parameter list. Rows only align within a scope.
 #[derive(Debug, Default)]
 struct Scope {
     rows: Vec<usize>,
     /// Whether a blank line or a directive has been written since a row of this
-    /// scope last started. Taken into [`Row::after_break`] by the next one.
+    /// scope last started.
     broken: bool,
 }
 
@@ -199,8 +164,7 @@ struct PendingMarker {
 }
 
 pub(crate) struct Formatter<'a> {
-    /// Kept so that [`Formatter::verbatim`] can slice out a node's original
-    /// text by byte range.
+    /// The source, for [`Formatter::verbatim`].
     src: &'a str,
     /// Written only through [`Formatter::push`] until [`Formatter::finish`], so
     /// that the two fields below stay in step with it.
@@ -209,25 +173,20 @@ pub(crate) struct Formatter<'a> {
     lines: usize,
     /// Whether the last line of `out` holds nothing but whitespace so far.
     line_blank: bool,
-    /// Current indentation depth, in levels rather than columns.
+    /// Indentation depth, in levels.
     indent: usize,
     /// The gap in front of the next thing written.
     gap: Gap,
-    /// Whether blank lines mean anything where we currently are. Policy for a
-    /// whole region rather than state of one gap, which is why it sits out here
-    /// and survives being spent; see [`Formatter::allow_blank_lines`].
+    /// Whether blank lines are kept in the current region. See
+    /// [`Formatter::allow_blank_lines`].
     blank_lines: bool,
-    /// Whether a newline has been seen in the source since the last real
-    /// token. This is how a comment tells a trailing annotation (`sw = rw; //
-    /// writable`) from one that introduces what follows.
+    /// Whether the source had a newline since the last token, which tells a
+    /// trailing comment from one that introduces what follows.
     saw_newline: bool,
-    /// Whether the last thing written was a comment still waiting to find out
-    /// what separated it from what follows. See [`Formatter::trivia`].
+    /// Whether the last thing written was a comment.
     after_comment: bool,
-    /// The line ending to write, taken from the input. See [`line_ending`].
+    /// The line ending to write. See [`line_ending`].
     eol: &'static str,
-    /// Alignment metadata over `out`. Rules still emit in one pass; these byte
-    /// positions are the small IR retained until `finish` can see every row.
     rows: Vec<Row>,
     row_stack: Vec<usize>,
     scopes: Vec<Scope>,
@@ -237,12 +196,8 @@ pub(crate) struct Formatter<'a> {
 
 /// The line ending a file uses, judged by its first line break.
 ///
-/// A formatter that imposed its own would rewrite every line of a CRLF file,
-/// turning a whitespace tidy-up into a whole-file diff for anyone on Windows.
-/// So the input decides, and there is nothing to configure.
-///
-/// Mixed files are settled by the first break rather than by counting. It is
-/// the ending the file already looks like it has, and a tie needs no rule.
+/// Imposing one would turn formatting a CRLF file into a whole-file diff. A
+/// mixed file gets the ending of its first break.
 pub(crate) fn line_ending(src: &str) -> &'static str {
     match src.find('\n') {
         Some(i) if src.as_bytes()[..i].last() == Some(&b'\r') => "\r\n",
@@ -271,8 +226,8 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    /// Finishes the file: exactly one trailing newline, or nothing at all if
-    /// there was no content.
+    /// Aligns the output and ends it with exactly one newline, or with nothing
+    /// if it is empty.
     pub(crate) fn finish(mut self) -> String {
         self.align();
         let trimmed = self.out.trim_end().len();
@@ -294,27 +249,18 @@ impl<'a> Formatter<'a> {
 
     /// Notes that the author left a blank line in the gap now open.
     ///
-    /// Not a request: it widens the gap rather than opening one, and if the
-    /// separation is still a space or nothing by the time something is written,
-    /// this is discarded along with the rest of the whitespace it came from.
-    ///
-    /// Ignored where a rule has already settled the width, and where blank
-    /// lines carry nothing worth keeping. Both are checked here rather than at
-    /// the call site because there is only one call site: whitespace, which
-    /// knows what the author typed and nothing about where it landed.
+    /// Widens a break if the gap becomes one; ignored if a rule has settled the
+    /// width or blank lines are off in this region.
     pub(crate) fn blank_line(&mut self) {
         if self.blank_lines && self.gap.width == Width::Open {
             self.gap.width = Width::Blank;
         }
     }
 
-    /// Forces the separation to exactly `sep`, and settles the width with it.
-    ///
-    /// The counterpart to [`Formatter::request`], for the cases where the
-    /// accumulated minimum is not merely too weak but wrong: a trailing comment
-    /// belongs on the line it annotates however much the enclosing rule wanted
-    /// a break there, and a closing brace starts a line whatever the last item
-    /// left pending.
+    /// Forces the separation to exactly `sep` and settles the width, for where
+    /// the accumulated request is wrong rather than too weak: a trailing comment
+    /// stays on its line whatever break was pending, and a closing brace starts
+    /// a line whatever the last item left.
     pub(crate) fn pin(&mut self, sep: Sep) {
         self.gap = Gap {
             sep,
@@ -322,16 +268,10 @@ impl<'a> Formatter<'a> {
         };
     }
 
-    /// Settles the width of the gap now open without touching its separation.
+    /// Settles the width of the gap now open without changing its separation.
     ///
-    /// [`pin`](Formatter::pin) with no opinion on whether the gap breaks, for
-    /// the one place that cannot use it: the whitespace after an opening brace
-    /// is not a child of the braced node -- the parser hands trivia to the item
-    /// that follows it -- so it arrives partway down a recursion the rule has
-    /// already entered, by which time saying `Sep::Newline` would be guessing at
-    /// what that item wanted.
-    ///
-    /// Spent with the gap, so it speaks for that one gap and no further.
+    /// For the gap after an opening bracket: its whitespace belongs to the item
+    /// that follows, so the bracket's rule cannot yet say whether it breaks.
     pub(crate) fn settle_width(&mut self) {
         self.gap.width = Width::Settled;
     }
@@ -339,17 +279,9 @@ impl<'a> Formatter<'a> {
     /// Sets whether blank lines survive in the region being formatted, and
     /// returns the previous setting for the caller to restore.
     ///
-    /// The counterpart to [`Formatter::settle_width`], which speaks for one
-    /// gap; this speaks for everything nested inside a construct, which is what
-    /// it takes to cover gaps that arrive several levels down.
-    ///
-    /// A blank line is grouping, and grouping says something only between
-    /// things that stand on their own. Statements do, so a body keeps them:
-    /// which registers belong together is the author's to say and not something
-    /// the formatter could work out. The elements of a comma-separated list do
-    /// not -- they are parts of one construct, laid out one per line because it
-    /// grew too long -- so a blank line between two parameters is noise, and
-    /// dropping it is the only thing this is currently used for.
+    /// Blank lines group statements, which is the author's call, so a body
+    /// keeps them. Between the elements of a parameter list they say nothing,
+    /// so a broken list turns them off.
     pub(crate) fn allow_blank_lines(&mut self, allow: bool) -> bool {
         std::mem::replace(&mut self.blank_lines, allow)
     }
@@ -358,8 +290,8 @@ impl<'a> Formatter<'a> {
     // Alignment structure
     //----------------------------------------------------------------------
 
-    /// Opens a list-local alignment scope. Rows in nested bodies and parameter
-    /// lists must never contribute widths to their enclosing list.
+    /// Opens an alignment scope, so that rows in a nested body or parameter
+    /// list never align with those outside it.
     pub(crate) fn open_alignment_scope(&mut self) {
         let id = self.scopes.len();
         self.scopes.push(Scope::default());
@@ -371,8 +303,7 @@ impl<'a> Formatter<'a> {
         self.scope_stack.pop();
     }
 
-    /// Begins one candidate row. Leading trivia is allowed to arrive after
-    /// this call: the row starts only when `token` sees its first real token.
+    /// Begins a row in the current scope. Its leading trivia may follow.
     pub(crate) fn begin_row(&mut self, family: RowFamily) {
         let id = self.rows.len();
         let scope = *self.scope_stack.last().expect("root alignment scope");
@@ -394,9 +325,9 @@ impl<'a> Formatter<'a> {
         self.pending_markers.retain(|marker| marker.row != row);
     }
 
-    /// Marks the pending gap as the right edge of the current semantic cell.
-    /// It is attached when the next thing is written, so that it lands after
-    /// the gap's line break rather than before it.
+    /// Marks the gap now open as the right edge of a cell in the current row.
+    /// The marker is placed when the next thing is written, after any line
+    /// break the gap turns into.
     pub(crate) fn align_before(&mut self, point: AlignPoint) {
         if let Some(&row) = self.row_stack.last() {
             self.pending_markers.push(PendingMarker { row, point });
@@ -415,13 +346,11 @@ impl<'a> Formatter<'a> {
         self.indent = self.indent.saturating_sub(1);
     }
 
+    /// Writes the separation the gap now open asks for, and spends it.
     fn materialize(&mut self) {
-        // Taken whether or not it is used: a gap describes the space between
-        // two things, and once one of them is written it is spent either way.
         let gap = std::mem::take(&mut self.gap);
-        // Nothing to separate from. This is what keeps a leading comment from
-        // being pushed off the first line by the newline the caller requested
-        // before it.
+        // Nothing to separate from, so a file's leading comment is not pushed
+        // off the first line.
         if self.out.is_empty() {
             return;
         }
@@ -456,14 +385,13 @@ impl<'a> Formatter<'a> {
         self.push(&" ".repeat(self.indent * INDENT_WIDTH));
     }
 
-    /// The only way anything reaches `out`, so that the line bookkeeping cannot
-    /// fall behind it.
+    /// Appends `text` to `out`, keeping the line bookkeeping in step.
     fn push(&mut self, text: &str) {
         let mut rest = text;
         while let Some(i) = rest.find('\n') {
             self.extend_line(&rest[..i]);
-            // A line with nothing on it -- whether a blank line the layout
-            // asked for or one inside a comment -- ends an aligned run.
+            // An empty line -- a blank line, or one inside a comment -- ends
+            // an aligned run.
             if self.line_blank {
                 self.break_run();
             }
@@ -481,7 +409,7 @@ impl<'a> Formatter<'a> {
         self.out.push_str(text);
     }
 
-    /// The current end of `out`, as a [`Pos`].
+    /// The current end of `out`.
     fn cursor(&self) -> Pos {
         Pos {
             byte: self.out.len(),
@@ -490,8 +418,8 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    /// Sets where `row` starts, if nothing has yet, and takes over its scope's
-    /// note of whether a break came first.
+    /// Sets where `row` starts, if that is not yet known, and takes over its
+    /// scope's note of a break before it.
     fn start_row(&mut self, row: usize) {
         if self.rows[row].start.is_none() {
             let scope = self.rows[row].scope;
@@ -500,8 +428,7 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    /// Notes that the run of rows in the current scope is broken, by a blank
-    /// line or a directive.
+    /// Ends the aligned run in the current scope.
     fn break_run(&mut self) {
         let scope = *self.scope_stack.last().expect("root alignment scope");
         self.scopes[scope].broken = true;
@@ -511,34 +438,27 @@ impl<'a> Formatter<'a> {
     // Writing
     //----------------------------------------------------------------------
 
-    /// Writes `text` after materialising any pending separation.
-    ///
-    /// The text is emitted exactly as given; nothing here inspects it, so a
-    /// caller passing multi-line text owns its interior indentation.
+    /// Writes `text` exactly as given, after any pending separation.
     fn write_raw(&mut self, text: &str) {
         self.materialize();
         self.push(text);
     }
 
-    /// Records what was just written, for the comment that may come next: see
-    /// [`Formatter::trivia`].
+    /// Records what was just written, for the comment that may come next.
     fn wrote(&mut self, comment: bool) {
         self.saw_newline = false;
         self.after_comment = comment;
     }
 
-    /// Writes a significant token verbatim.
+    /// Writes a significant token.
     ///
-    /// Token text is always copied rather than reconstructed from the kind:
-    /// several kinds have more than one spelling (`~^` and `^~` are both
-    /// `XNOR`, `0xA5` and `0xa5` are both `HEX_NUMBER`), and which one the
-    /// author wrote is not the formatter's business.
+    /// The text is copied rather than rebuilt from the kind: `~^` and `^~` are
+    /// both `XNOR`, and which one the author wrote is theirs to choose.
     pub(crate) fn token(&mut self, tok: &SyntaxToken) {
         debug_assert!(!tok.kind().is_trivia(), "trivia must go through trivia()");
         // A terminator attaches to a block comment as it would to code. The
-        // space a comment asks for after itself is only a floor -- no rule
-        // asks for one before a terminator -- so it gives way here, while a
-        // line break the author put after the comment does not.
+        // space a comment keeps after itself gives way, but a line break the
+        // author put there does not.
         if self.after_comment
             && self.gap.sep == Sep::Space
             && matches!(tok.kind(), SyntaxKind::SEMICOLON | SyntaxKind::COMMA)
@@ -563,43 +483,29 @@ impl<'a> Formatter<'a> {
         match tok.kind() {
             SyntaxKind::WHITESPACE => {
                 let newlines = tok.text().bytes().filter(|&b| b == b'\n').count();
-                // Two newlines means one empty line between them. Anything
-                // more says the same thing, which is how runs of blank lines
-                // get capped.
+                // Any run of blank lines counts as one.
                 if newlines >= 2 {
                     self.blank_line();
                 } else if newlines == 1 && self.after_comment {
-                    // The one case where a plain source line break survives.
-                    // Line breaks are otherwise the rules' decision -- honour
-                    // them in general and nothing would ever be normalised --
-                    // but a comment's trailing side has no rule to consult, and
-                    // whether it ended the line is the author's to say.
+                    // Whether a comment ended its line is the author's call,
+                    // since no rule governs what follows a comment.
                     self.request(Sep::Newline);
                 }
                 self.saw_newline |= newlines >= 1;
             }
             kind if kind.is_directive() => {
-                // Requested rather than pinned, unlike a line comment: the
-                // point here is to *raise* the separation to a break, never to
-                // overrule a stronger one, and leaving the width open is what
-                // lets a blank line the author left in front of an `include`
-                // block survive.
+                // Requested rather than pinned, so a blank line in front of a
+                // directive survives.
                 self.request(Sep::Newline);
-                // A branching directive is always aligned with zero indentation.
+                // A branching directive is always flush left.
                 let saved_indent = self.indent;
                 if kind == SyntaxKind::COND_DIRECTIVE {
                     self.indent = 0;
                 }
-                // A directive runs to the end of its line, so any spaces at
-                // the end of it are outside the macro body in every sense that
-                // matters -- and keeping them would leave the one thing this
-                // formatter promises never to emit.
-                //
-                // Except after a final backslash, where trimming would change
-                // where the directive ends: the token then either holds the
-                // line break of a continuation, which must stay part of it, or
-                // spaces that are all that keep the backslash from continuing
-                // onto the next line.
+                // Trailing spaces are trimmed, except back to a final
+                // backslash: there the token either holds a continuation's line
+                // break, which is part of it, or spaces that are all that stop
+                // the backslash from continuing onto the next line.
                 let text = tok.text();
                 let trimmed = text.trim_end();
                 self.write_raw(if trimmed.ends_with('\\') {
@@ -609,64 +515,48 @@ impl<'a> Formatter<'a> {
                 });
                 self.indent = saved_indent;
                 if text.ends_with('\n') && trimmed.ends_with('\\') {
-                    // The continuation's line break already opened the empty
-                    // line that ends the macro, so that is the blank line.
+                    // The continuation already opened the empty line that ends
+                    // the macro, so that is the blank line.
                     self.settle_width();
                 }
-                // Whatever the directive does, rows on either side of it may
-                // not be measured against each other.
                 self.break_run();
-                // Unconditional, for the same reason as a line comment's:
-                // whatever follows a directive *must* start a new line, and
-                // getting this wrong swallows code into a macro body.
+                // Whatever follows a directive must start a new line, or it
+                // becomes part of the directive.
                 self.request(Sep::Newline);
                 self.wrote(false);
             }
             kind if kind.is_comment() => {
-                // A comment that followed a newline in the source introduces
-                // what comes after it and belongs on its own line. One that did
-                // not is annotating the token it trails, and stays beside it.
+                // A comment after a newline introduces what follows and gets a
+                // line of its own; one without stays beside what it trails.
                 let inline = !self.saw_newline;
                 if self.saw_newline {
                     self.request(Sep::Newline);
                 } else if kind == SyntaxKind::LINE_COMMENT {
-                    // Pinned rather than requested, because the enclosing rule
-                    // has often already asked for a break: the parser hands a
-                    // comment to the item that *follows* it, so `reg r { // why`
-                    // reaches this point with the body's newline-before-each-
-                    // item already pending, and a mere request would lose to it.
-                    //
-                    // Overriding is safe only for a line comment, which runs to
-                    // the end of its line: nothing can follow it there, so
-                    // pinning can never pull the next statement up beside it.
+                    // Pinned, because the parser hands a comment to the item
+                    // after it, so in `reg r { // why` the body's newline is
+                    // already pending. That is safe only for a line comment:
+                    // nothing can follow it on its line.
                     self.pin(Sep::Space);
                 } else {
                     self.request(Sep::Space);
                 }
-                // A trailing comment belongs to the physical code line, even
-                // when rowan handed its trivia to the following CST node --
-                // unless a break the rule asked for moves it to the next line.
+                // A trailing comment belongs to the row on its line, unless a
+                // pending break moves it to the next one.
                 if inline && self.gap.sep != Sep::Newline {
                     self.attach_trailing_comment();
                 }
                 if kind == SyntaxKind::LINE_COMMENT {
-                    // A line comment runs to the end of its line, so spaces at
-                    // the end of it are trailing whitespace like any other.
                     self.write_raw(tok.text().trim_end());
                 } else {
                     self.write_raw(tok.text());
                 }
                 if kind == SyntaxKind::LINE_COMMENT {
-                    // A line comment swallows the rest of its line, so anything
-                    // after it *must* start a new one. Getting this wrong
-                    // comments out code, which is why it is unconditional here
-                    // rather than left to the rules.
+                    // Anything after a line comment must start a new line, or
+                    // it is commented out.
                     self.request(Sep::Newline);
                 } else {
-                    // A block comment may legally be followed on the same line,
-                    // so this is only a floor: it keeps `*/` from abutting the
-                    // next token, and the whitespace arm above raises it to a
-                    // newline if the author ended the line there.
+                    // Code may follow a block comment on its line; this keeps
+                    // `*/` off the next token.
                     self.request(Sep::Space);
                 }
                 self.wrote(true);
@@ -675,32 +565,13 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    /// Reproduces `node` exactly as it appears in the source.
+    /// Reproduces `node` as it appears in the source, for statements under
+    /// `rdlfmt: off` or `skip`, and for [`SyntaxKind::ERROR`] nodes, which a
+    /// successful format never contains.
     ///
-    /// This began as the fallback for kinds without a rule yet, which is what
-    /// made the formatter runnable and testable from its first commit. Every
-    /// kind now has one except [`SyntaxKind::ERROR`], and an `ERROR` node exists
-    /// only where the parser recorded an error, which [`crate::format`] refuses
-    /// outright -- so nothing reaches this in a successful format.
-    ///
-    /// Kept because it is the right answer for the case it is left holding:
-    /// input the parser could not understand should be handed back untouched
-    /// rather than reshaped by rules that assume a structure it does not have.
-    /// An error-tolerant mode would need exactly this.
-    ///
-    /// Trivia at either end is routed through [`Formatter::trivia`] rather than
-    /// dumped with the rest: it belongs to the *surrounding* layout, not to the
-    /// node. Leaving leading trivia in the span would emit the source's
-    /// indentation alongside the indentation just generated, and leaving
-    /// trailing trivia in it would preserve the column padding in front of a
-    /// trailing comment, which is exactly the alignment the formatter exists to
-    /// stop maintaining by hand.
-    ///
-    /// The *interior* does keep its original whitespace, so a construct spread
-    /// over several lines keeps the indentation it was written with even when
-    /// emitted at a different depth. Every construct that normally spans lines
-    /// -- anything with a braced body -- has a real rule, so this is reachable
-    /// only via a hand-wrapped statement, and it shrinks with each rule added.
+    /// Trivia at either end still goes through [`Formatter::trivia`], because
+    /// it belongs to the surrounding layout: the source's indentation in front
+    /// of the node, or its padding before a trailing comment, is not kept.
     pub(crate) fn verbatim(&mut self, node: &SyntaxNode) {
         let src = self.src;
         let mut start = node.text_range().start();
@@ -710,8 +581,8 @@ impl<'a> Formatter<'a> {
             self.trivia(&tok);
             start = tok.text_range().end();
         }
-        // Bounded below by `start` so that a node which is *entirely* trivia
-        // has it emitted once, by the loop above, rather than twice.
+        // Bounded below by `start`, so a node that is all trivia is not
+        // emitted twice.
         let trailing = trailing_trivia(node, start);
         if let Some(first) = trailing.first() {
             end = first.text_range().start();
@@ -726,8 +597,8 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    /// Adds the comment boundary to the most recent completed row when that
-    /// row still occupies the current physical line.
+    /// Marks the comment about to be written as the trailing comment of the
+    /// last row on the current line, if there is one.
     fn attach_trailing_comment(&mut self) {
         let line = self.lines;
         let Some(row) = self
@@ -739,7 +610,7 @@ impl<'a> Formatter<'a> {
             return;
         };
 
-        // `trivia` settles an inline comment to a space before writing it.
+        // `trivia` has already asked for a space in front of the comment.
         row.markers.push(Marker {
             point: AlignPoint::TrailingComment,
             pos: self.out.len(),
@@ -747,12 +618,10 @@ impl<'a> Formatter<'a> {
         });
     }
 
-    /// Computes padding from the completed rows and inserts it in one rebuild
-    /// of the output. Layout is already final at this point.
+    /// Pads each run of alignable rows and inserts the padding into `out`.
     fn align(&mut self) {
-        // A comment is taken for a trailing one when it is written, before
-        // anyone can know whether more of the row follows it on the line. Now
-        // that every row is complete, one that did is just part of a cell.
+        // A comment that more of its row followed is part of a cell, not a
+        // trailing comment. That was not known when it was written.
         for row in &mut self.rows {
             if let Some(end) = row.end {
                 row.markers.retain(|marker| {
@@ -799,6 +668,8 @@ impl<'a> Formatter<'a> {
         self.out = aligned;
     }
 
+    /// Pads every column of a run, where a column is a stretch of consecutive
+    /// rows that all have a given cell.
     fn align_run(&self, run: &[usize], insertions: &mut BTreeMap<usize, usize>) {
         if run.len() < 2 {
             return;
@@ -864,12 +735,9 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    /// The width of `row` up to `marker`, with the padding already decided for
-    /// the cells in between.
-    ///
-    /// A trailing comment is measured this way rather than as a cell, because
-    /// rows may differ in how many cells come before it: what lines comments up
-    /// is the column the code ends at.
+    /// The width of `row` up to `marker`, including the padding already
+    /// decided for its cells. Trailing comments line up on this rather than on
+    /// a cell, because rows may have different cells before them.
     fn line_width(&self, row: &Row, marker: Marker, insertions: &BTreeMap<usize, usize>) -> usize {
         let start = row.start.map_or(marker.pos, |start| start.byte);
         self.out[start..marker.pos].chars().count()
@@ -879,6 +747,7 @@ impl<'a> Formatter<'a> {
                 .sum::<usize>()
     }
 
+    /// The width of the cell that ends at `marker`.
     fn cell_width(&self, row: &Row, marker: Marker) -> usize {
         let start = row
             .markers
@@ -895,11 +764,8 @@ impl<'a> Formatter<'a> {
     }
 }
 
-/// The run of trivia at the very start of `node`.
-///
-/// Leading trivia sits on the leftmost leaf, however deep that is -- the block
-/// comment before `reg my_reg` lands three levels down, inside `COMPONENT_TYPE`
-/// -- so this walks the token stream rather than the node's direct children.
+/// The run of trivia at the start of `node`. It sits on the leftmost token,
+/// however deep that is.
 pub(crate) fn leading_trivia(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
     tokens(node).take_while(|tok| tok.kind().is_trivia())
 }
@@ -911,10 +777,8 @@ pub(crate) fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
         .take_while(move |tok| tok.text_range().end() <= end)
 }
 
-/// The run of trivia at the end of `node`, in source order.
-///
-/// `floor` bounds the search from below, so that trivia already emitted as
-/// leading is not emitted a second time here.
+/// The run of trivia at the end of `node`, in source order, starting no
+/// earlier than `floor`.
 fn trailing_trivia(node: &SyntaxNode, floor: TextSize) -> Vec<SyntaxToken> {
     let mut out: Vec<SyntaxToken> =
         std::iter::successors(node.last_token(), |tok: &SyntaxToken| tok.prev_token())
