@@ -47,7 +47,7 @@
 
 use crate::syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 use rowan::TextSize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Spaces per indentation level, as the PeakRDL style guide asks for.
 ///
@@ -143,17 +143,53 @@ struct Marker {
     base_space: bool,
 }
 
+/// A place in the output, with the facts about its line that alignment needs.
+///
+/// Recorded as the output is written rather than recovered from it later:
+/// `out` only ever grows until [`Formatter::align`], so what was true of a
+/// position when it was reached is still true then.
+#[derive(Debug, Clone, Copy)]
+struct Pos {
+    byte: usize,
+    /// How many line breaks precede it.
+    line: usize,
+    /// Whether nothing but indentation precedes it on its line.
+    starts_line: bool,
+}
+
 #[derive(Debug)]
 struct Row {
     family: RowFamily,
-    start: Option<usize>,
-    end: Option<usize>,
+    scope: usize,
+    /// Where the first token or cell boundary landed. Leading trivia is
+    /// allowed to arrive after [`Formatter::begin_row`], so this is set late.
+    start: Option<Pos>,
+    end: Option<Pos>,
     markers: Vec<Marker>,
+    /// Whether a blank line or a directive separates this row from the
+    /// previous row of its scope, which ends any aligned run between them.
+    after_break: bool,
+}
+
+impl Row {
+    /// Whether the row can join an aligned run: a single line of its own,
+    /// with at least one cell boundary to align.
+    fn alignable(&self) -> bool {
+        self.family != RowFamily::Other
+            && !self.markers.is_empty()
+            && matches!(
+                (self.start, self.end),
+                (Some(start), Some(end)) if start.line == end.line && start.starts_line
+            )
+    }
 }
 
 #[derive(Debug, Default)]
 struct Scope {
     rows: Vec<usize>,
+    /// Whether a blank line or a directive has been written since a row of this
+    /// scope last started. Taken into [`Row::after_break`] by the next one.
+    broken: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -164,9 +200,15 @@ struct PendingMarker {
 
 pub(crate) struct Formatter<'a> {
     /// Kept so that [`Formatter::verbatim`] can slice out a node's original
-    /// text by byte range. Once every kind has a rule this goes away.
+    /// text by byte range.
     src: &'a str,
+    /// Written only through [`Formatter::push`] until [`Formatter::finish`], so
+    /// that the two fields below stay in step with it.
     out: String,
+    /// How many line breaks `out` holds.
+    lines: usize,
+    /// Whether the last line of `out` holds nothing but whitespace so far.
+    line_blank: bool,
     /// Current indentation depth, in levels rather than columns.
     indent: usize,
     /// The gap in front of the next thing written.
@@ -213,6 +255,8 @@ impl<'a> Formatter<'a> {
         Formatter {
             src,
             out: String::with_capacity(src.len()),
+            lines: 0,
+            line_blank: true,
             indent: 0,
             gap: Gap::default(),
             blank_lines: true,
@@ -331,13 +375,15 @@ impl<'a> Formatter<'a> {
     /// this call: the row starts only when `token` sees its first real token.
     pub(crate) fn begin_row(&mut self, family: RowFamily) {
         let id = self.rows.len();
+        let scope = *self.scope_stack.last().expect("root alignment scope");
         self.rows.push(Row {
             family,
+            scope,
             start: None,
             end: None,
             markers: Vec::new(),
+            after_break: false,
         });
-        let scope = *self.scope_stack.last().expect("root alignment scope");
         self.scopes[scope].rows.push(id);
         self.row_stack.push(id);
     }
@@ -349,8 +395,8 @@ impl<'a> Formatter<'a> {
     }
 
     /// Marks the pending gap as the right edge of the current semantic cell.
-    /// It is attached when the next significant token arrives, so comments in
-    /// leading trivia cannot steal a statement's first boundary.
+    /// It is attached when the next thing is written, so that it lands after
+    /// the gap's line break rather than before it.
     pub(crate) fn align_before(&mut self, point: AlignPoint) {
         if let Some(&row) = self.row_stack.last() {
             self.pending_markers.push(PendingMarker { row, point });
@@ -383,7 +429,7 @@ impl<'a> Formatter<'a> {
             Sep::None => self.materialize_markers(false),
             Sep::Space => {
                 self.materialize_markers(true);
-                self.out.push(' ');
+                self.push(" ");
             }
             Sep::Newline => {
                 self.newline(if gap.width == Width::Blank { 2 } else { 1 });
@@ -393,13 +439,11 @@ impl<'a> Formatter<'a> {
     }
 
     fn materialize_markers(&mut self, base_space: bool) {
-        for pending in self.pending_markers.drain(..) {
-            let pos = self.out.len();
-            let row = &mut self.rows[pending.row];
-            row.start.get_or_insert(pos);
-            row.markers.push(Marker {
+        for pending in std::mem::take(&mut self.pending_markers) {
+            self.start_row(pending.row);
+            self.rows[pending.row].markers.push(Marker {
                 point: pending.point,
-                pos,
+                pos: self.out.len(),
                 base_space,
             });
         }
@@ -407,11 +451,60 @@ impl<'a> Formatter<'a> {
 
     fn newline(&mut self, count: usize) {
         for _ in 0..count {
-            self.out.push_str(self.eol);
+            self.push(self.eol);
         }
-        for _ in 0..self.indent * INDENT_WIDTH {
-            self.out.push(' ');
+        self.push(&" ".repeat(self.indent * INDENT_WIDTH));
+    }
+
+    /// The only way anything reaches `out`, so that the line bookkeeping cannot
+    /// fall behind it.
+    fn push(&mut self, text: &str) {
+        let mut rest = text;
+        while let Some(i) = rest.find('\n') {
+            self.extend_line(&rest[..i]);
+            // A line with nothing on it -- whether a blank line the layout
+            // asked for or one inside a comment -- ends an aligned run.
+            if self.line_blank {
+                self.break_run();
+            }
+            self.out.push('\n');
+            self.lines += 1;
+            self.line_blank = true;
+            rest = &rest[i + 1..];
         }
+        self.extend_line(rest);
+    }
+
+    /// Appends text that holds no line break.
+    fn extend_line(&mut self, text: &str) {
+        self.line_blank = self.line_blank && text.chars().all(char::is_whitespace);
+        self.out.push_str(text);
+    }
+
+    /// The current end of `out`, as a [`Pos`].
+    fn cursor(&self) -> Pos {
+        Pos {
+            byte: self.out.len(),
+            line: self.lines,
+            starts_line: self.line_blank,
+        }
+    }
+
+    /// Sets where `row` starts, if nothing has yet, and takes over its scope's
+    /// note of whether a break came first.
+    fn start_row(&mut self, row: usize) {
+        if self.rows[row].start.is_none() {
+            let scope = self.rows[row].scope;
+            self.rows[row].start = Some(self.cursor());
+            self.rows[row].after_break = std::mem::take(&mut self.scopes[scope].broken);
+        }
+    }
+
+    /// Notes that the run of rows in the current scope is broken, by a blank
+    /// line or a directive.
+    fn break_run(&mut self) {
+        let scope = *self.scope_stack.last().expect("root alignment scope");
+        self.scopes[scope].broken = true;
     }
 
     //----------------------------------------------------------------------
@@ -424,7 +517,14 @@ impl<'a> Formatter<'a> {
     /// caller passing multi-line text owns its interior indentation.
     fn write_raw(&mut self, text: &str) {
         self.materialize();
-        self.out.push_str(text);
+        self.push(text);
+    }
+
+    /// Records what was just written, for the comment that may come next: see
+    /// [`Formatter::trivia`].
+    fn wrote(&mut self, comment: bool) {
+        self.saw_newline = false;
+        self.after_comment = comment;
     }
 
     /// Writes a significant token verbatim.
@@ -436,17 +536,15 @@ impl<'a> Formatter<'a> {
     pub(crate) fn token(&mut self, tok: &SyntaxToken) {
         debug_assert!(!tok.kind().is_trivia(), "trivia must go through trivia()");
         self.materialize();
-        let start = self.out.len();
-        for &row in &self.row_stack {
-            self.rows[row].start.get_or_insert(start);
+        for i in 0..self.row_stack.len() {
+            self.start_row(self.row_stack[i]);
         }
-        self.out.push_str(tok.text());
-        let end = self.out.len();
+        self.push(tok.text());
+        let end = self.cursor();
         for &row in &self.row_stack {
             self.rows[row].end = Some(end);
         }
-        self.saw_newline = false;
-        self.after_comment = false;
+        self.wrote(false);
     }
 
     /// Handles one trivia token: drops whitespace, keeps comments and
@@ -488,12 +586,14 @@ impl<'a> Formatter<'a> {
                 // formatter promises never to emit.
                 self.write_raw(tok.text().trim_end());
                 self.indent = saved_indent;
+                // Whatever the directive does, rows on either side of it may
+                // not be measured against each other.
+                self.break_run();
                 // Unconditional, for the same reason as a line comment's:
                 // whatever follows a directive *must* start a new line, and
                 // getting this wrong swallows code into a macro body.
                 self.request(Sep::Newline);
-                self.saw_newline = false;
-                self.after_comment = false;
+                self.wrote(false);
             }
             kind if kind.is_comment() => {
                 // A comment that followed a newline in the source introduces
@@ -535,8 +635,7 @@ impl<'a> Formatter<'a> {
                     // newline if the author ended the line there.
                     self.request(Sep::Space);
                 }
-                self.saw_newline = false;
-                self.after_comment = true;
+                self.wrote(true);
             }
             kind => unreachable!("not trivia: {kind:?}"),
         }
@@ -586,8 +685,7 @@ impl<'a> Formatter<'a> {
 
         if start < end {
             self.write_raw(&src[usize::from(start)..usize::from(end)]);
-            self.saw_newline = false;
-            self.after_comment = false;
+            self.wrote(false);
         }
         for tok in &trailing {
             self.trivia(tok);
@@ -597,13 +695,12 @@ impl<'a> Formatter<'a> {
     /// Adds the comment boundary to the most recent completed row when that
     /// row still occupies the current physical line.
     fn attach_trailing_comment(&mut self) {
-        let line_start = self.out.rfind('\n').map_or(0, |pos| pos + 1);
-        let Some((_, row)) = self
+        let line = self.lines;
+        let Some(row) = self
             .rows
             .iter_mut()
-            .enumerate()
             .rev()
-            .find(|(_, row)| row.end.is_some_and(|end| end >= line_start))
+            .find(|row| row.end.is_some_and(|end| end.line == line))
         else {
             return;
         };
@@ -623,32 +720,19 @@ impl<'a> Formatter<'a> {
 
         for scope in &self.scopes {
             let mut run: Vec<usize> = Vec::new();
-            let mut previous: Option<usize> = None;
-
-            for &row_id in &scope.rows {
-                let row = &self.rows[row_id];
-                let eligible = row.family != RowFamily::Other
-                    && row.start.zip(row.end).is_some_and(|(start, end)| {
-                        !self.out[start..end].contains('\n')
-                            && !row.markers.is_empty()
-                            && self.starts_its_line(start)
-                    });
-
-                let continues = eligible
-                    && previous.is_some_and(|prev_id| {
-                        let prev = &self.rows[prev_id];
-                        prev.family == row.family && !self.breaks_run(prev, row)
-                    });
-
+            for &id in &scope.rows {
+                let row = &self.rows[id];
+                let continues = row.alignable()
+                    && !row.after_break
+                    && run
+                        .last()
+                        .is_some_and(|&last| self.rows[last].family == row.family);
                 if !continues {
                     self.align_run(&run, &mut insertions);
                     run.clear();
                 }
-                if eligible {
-                    run.push(row_id);
-                    previous = Some(row_id);
-                } else {
-                    previous = None;
+                if row.alignable() {
+                    run.push(id);
                 }
             }
             self.align_run(&run, &mut insertions);
@@ -670,47 +754,18 @@ impl<'a> Formatter<'a> {
         self.out = aligned;
     }
 
-    /// Whether nothing but indentation precedes `start` on its physical line.
-    fn starts_its_line(&self, start: usize) -> bool {
-        let line_start = self.out[..start].rfind('\n').map_or(0, |pos| pos + 1);
-        self.out[line_start..start].trim().is_empty()
-    }
-
-    fn breaks_run(&self, previous: &Row, current: &Row) -> bool {
-        let (Some(end), Some(start)) = (previous.end, current.start) else {
-            return true;
-        };
-        let between = &self.out[end..start];
-        // Ignore the remainder of the previous code line and the indentation
-        // before the current one. A comment-only line between them is
-        // transparent; an actually empty interior line is a grouping boundary.
-        let mut physical = between.split('\n');
-        physical.next();
-        let mut interior: Vec<&str> = physical.collect();
-        interior.pop();
-        interior.iter().any(|line| line.trim().is_empty())
-            || crate::syntax::lex(between)
-                .iter()
-                .any(|(kind, _)| kind.is_directive())
-    }
-
     fn align_run(&self, run: &[usize], insertions: &mut BTreeMap<usize, usize>) {
         if run.len() < 2 {
             return;
         }
 
-        for point in [
-            AlignPoint::InstType,
-            AlignPoint::InstName,
-            AlignPoint::InstReset,
-            AlignPoint::InstAddress,
-            AlignPoint::InstStride,
-            AlignPoint::InstAlign,
-            AlignPoint::ParamName,
-            AlignPoint::ParamDefault,
-            AlignPoint::EnumValue,
-            AlignPoint::TrailingComment,
-        ] {
+        // Each column is padded independently, from widths measured before any
+        // padding, so the order they are visited in does not matter.
+        let points: BTreeSet<AlignPoint> = run
+            .iter()
+            .flat_map(|&id| self.rows[id].markers.iter().map(|marker| marker.point))
+            .collect();
+        for point in points {
             let mut group: Vec<(usize, Marker)> = Vec::new();
             for &row_id in run {
                 let marker = self.rows[row_id]
@@ -764,7 +819,7 @@ impl<'a> Formatter<'a> {
             .filter(|candidate| candidate.pos < marker.pos)
             .map(|candidate| candidate.pos)
             .max()
-            .or(row.start)
+            .or(row.start.map(|start| start.byte))
             .unwrap_or(marker.pos);
         self.out[start..marker.pos]
             .trim_start_matches([' ', '\t'])
