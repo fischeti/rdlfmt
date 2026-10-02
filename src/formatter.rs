@@ -779,9 +779,14 @@ impl<'a> Formatter<'a> {
 /// comment before `reg my_reg` lands three levels down, inside `COMPONENT_TYPE`
 /// -- so this walks the token stream rather than the node's direct children.
 pub(crate) fn leading_trivia(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
+    tokens(node).take_while(|tok| tok.kind().is_trivia())
+}
+
+/// Every token of `node`, in source order.
+pub(crate) fn tokens(node: &SyntaxNode) -> impl Iterator<Item = SyntaxToken> {
     let end = node.text_range().end();
     std::iter::successors(node.first_token(), |tok: &SyntaxToken| tok.next_token())
-        .take_while(move |tok| tok.text_range().end() <= end && tok.kind().is_trivia())
+        .take_while(move |tok| tok.text_range().end() <= end)
 }
 
 /// The run of trivia at the end of `node`, in source order.
