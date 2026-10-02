@@ -1,0 +1,30 @@
+`include "a.rdl"
+`define   W    32
+`define MAX(a,b) ((a) > (b) ? (a) : (b))
+`define MULTI a + \
+      b
+`undef OLD
+`line 10 "x.rdl" 0
+
+addrmap top {
+    `include "regs.rdl"
+`ifdef FOO
+    my_reg r1;
+`elsif BAR
+    my_reg r2;
+`else
+    my_reg r3;
+`endif
+`ifndef X
+    reg {
+        field {} f[`W - 1:0];
+    } r4;
+`endif
+    my_reg a;
+    `undef W
+    `MY_REG_T r5;
+    r6.f->sw = `ACCESS;
+};
+`ifdef FOO
+addrmap guarded {};
+`endif

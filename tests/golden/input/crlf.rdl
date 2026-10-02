@@ -1,0 +1,8 @@
+addrmap top{
+  reg{}r;
+
+
+  // c
+  r a@0x0;
+  r bb@0x4;
+};

@@ -1,0 +1,9 @@
+constraint c1{this>0;this<=8;this inside{1,2,[3:4]};this inside my_enum;a=1;b=c;};
+constraint   c2   {   this  >  0 ;  }  ;
+constraint c3 {};
+addrmap top{
+constraint{this<8;}c4,c5;
+constraint {
+this inside { [0:3] , 7 };
+} anon;
+};

@@ -1,0 +1,56 @@
+addrmap top {
+r ctrl @ 0x0;
+r status @ 0x4;
+r data[4] @ 0x10 += 0x4;
+r longer_name_here @ 0x100 %= 0x10;
+external r ext @ 0x200;
+r plain;
+
+r a @ 0x0; // one
+r bbbbbb @ 0x1000; // two
+r cc; // three
+
+r x @ 0x0;
+// interleaved comment
+r yyyy @ 0x4;
+/* block */ r zz @ 0x8;
+r w
+  @ 0xc;
+r v @ 0x10;
+`ifdef FOO
+r u @ 0x14;
+`endif
+r t @ 0x18;
+`include "x.rdl"
+r s @ 0x1c;
+name = "breaks the run";
+r q @ 0x20;
+r #(.W(1)) p @ 0x24;
+r o @ 0x28;
+r n, m @ 0x2c;
+r l @ 0x30;
+field {} f1[7:0] = 0;
+field {} f22[15:8] = 0x1;
+field {} f333 = 1;
+// rdlfmt: off
+r   off1    @ 0x40;
+r off22 @ 0x44;
+// rdlfmt: on
+r on1 @ 0x48;
+r on22 @ 0x4c;
+// rdlfmt: skip
+r   skipped  @ 0x50;
+r after @ 0x54;
+r after_two @ 0x58;
+};
+reg pr #(longint unsigned W = 32, boolean SPLIT = true, string NAME = "n", accesstype A) {};
+reg pr2 #(longint unsigned W = 32, // width
+boolean S = true, string N) {};
+enum e { IDLE = 0; RUNNING = 1; X; LONG_NAME_ENTRY = 0x10; B = 2 {desc="b";}; C = 3; DD = 4; };
+enum e2 {
+A = 0; // a
+BBBB = 1; // b
+
+CC = 2;
+D = 3 /* d */;
+};

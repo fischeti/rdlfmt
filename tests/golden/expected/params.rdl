@@ -1,0 +1,49 @@
+reg r1 #(longint unsigned W = 32) {
+    regwidth = W;
+};
+reg r2 #(
+    longint unsigned W = 32,
+    boolean          S = true,
+    string           N = "n"
+) {};
+reg r3 #(
+    longint unsigned W = 32,
+    boolean          S = true
+) {};
+reg r4 #( // why
+    longint unsigned W = 32
+) {};
+reg r5 #(
+    /* a
+  b */ longint unsigned W = 32
+) {};
+reg r6 #(
+    `include "p.rdl"
+    longint unsigned W = 32
+) {};
+reg r7 #(
+    longint unsigned W     = 32,  // width
+    boolean          SPLIT = true /* split */
+) {};
+reg r8 #(
+    longint unsigned W[] = '{ 1, 2 },
+    accesstype       A   = rw,
+    my_struct        S   = my_struct'{ a: 1, b: 2 }
+) {};
+addrmap top #(string p = "x") {
+    r1 #(.W(8)) a @ 0x0;
+    r2 #(
+        .W(16),
+        .S(false)
+    ) b @ 0x10;
+    r2 #(
+        .W(8),
+        .S(true),
+        .N("abc")
+    ) c, d;
+    r1 #(.W(`WIDTH)) e;
+    r2 #(
+        .W(8), // first
+        .S(true)
+    ) f;
+};

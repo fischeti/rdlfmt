@@ -1,0 +1,4 @@
+addrmap a {
+    name = "tabs";
+    r x @ 0x0;
+};
