@@ -14,8 +14,7 @@ addrmap top { // beside the brace
     /* multi
        line
          block */ reg {} r2;
-    reg { /* only a comment */
-    } r3;
+    reg { /* only a comment */ } r3;
     reg {} r4;
     a = 1 /* mid */ + /* mid2 */ 2;
     b = 1 // ends line
