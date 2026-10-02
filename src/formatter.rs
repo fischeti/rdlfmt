@@ -594,8 +594,25 @@ impl<'a> Formatter<'a> {
                 // the end of it are outside the macro body in every sense that
                 // matters -- and keeping them would leave the one thing this
                 // formatter promises never to emit.
-                self.write_raw(tok.text().trim_end());
+                //
+                // Except after a final backslash, where trimming would change
+                // where the directive ends: the token then either holds the
+                // line break of a continuation, which must stay part of it, or
+                // spaces that are all that keep the backslash from continuing
+                // onto the next line.
+                let text = tok.text();
+                let trimmed = text.trim_end();
+                self.write_raw(if trimmed.ends_with('\\') {
+                    text
+                } else {
+                    trimmed
+                });
                 self.indent = saved_indent;
+                if text.ends_with('\n') && trimmed.ends_with('\\') {
+                    // The continuation's line break already opened the empty
+                    // line that ends the macro, so that is the blank line.
+                    self.settle_width();
+                }
                 // Whatever the directive does, rows on either side of it may
                 // not be measured against each other.
                 self.break_run();

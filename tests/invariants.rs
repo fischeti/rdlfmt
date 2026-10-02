@@ -256,6 +256,28 @@ fn no_trailing_whitespace_on_any_line() {
     }
 }
 
+/// A continuation followed by a blank line ends the macro there; the line break
+/// it continues onto is part of the directive and must survive.
+#[test]
+fn a_continuation_onto_a_blank_line_is_kept() {
+    let out = check("`define Z \\\n\naddrmap a {};\n");
+    assert_eq!(out, "`define Z \\\n\naddrmap a {};\n");
+    // It is the blank line, so the cap on blank lines counts it.
+    let out = check("`define Z \\\n\n\n\naddrmap a {};\n");
+    assert_eq!(out, "`define Z \\\n\naddrmap a {};\n");
+}
+
+/// A backslash followed by spaces is not a continuation, and trimming the
+/// spaces would make it one. This is the one place the output keeps trailing
+/// whitespace, so it cannot go through `check`.
+#[test]
+fn spaces_after_a_final_backslash_are_kept() {
+    let src = "`define Z \\  \naddrmap a {};\n";
+    let out = format(src).unwrap();
+    assert_eq!(out, src);
+    assert_eq!(format(&out).unwrap(), out);
+}
+
 #[test]
 fn trailing_whitespace_inside_a_line_comment_is_dropped() {
     let out = check("addrmap a {}; // c \t \n// d  \n");
