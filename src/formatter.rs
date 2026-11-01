@@ -483,13 +483,14 @@ impl<'a> Formatter<'a> {
         match tok.kind() {
             SyntaxKind::WHITESPACE => {
                 let newlines = tok.text().bytes().filter(|&b| b == b'\n').count();
-                // Any run of blank lines counts as one.
-                if newlines >= 2 {
-                    self.blank_line();
-                } else if newlines == 1 && self.after_comment {
+                if newlines >= 1 && self.after_comment {
                     // Whether a comment ended its line is the author's call,
                     // since no rule governs what follows a comment.
                     self.request(Sep::Newline);
+                }
+                // Any run of blank lines counts as one.
+                if newlines >= 2 {
+                    self.blank_line();
                 }
                 self.saw_newline |= newlines >= 1;
             }

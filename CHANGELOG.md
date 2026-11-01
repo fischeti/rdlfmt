@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A block comment followed by a blank line no longer pulls the next line up
+  onto its own ([#21](https://github.com/fischeti/rdlfmt/issues/21)).
+
 ## [0.4.0] - 2026-10-02
 
 ### Removed
