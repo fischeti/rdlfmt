@@ -115,21 +115,30 @@ wrong than just which files are.
 pre-commit
 ----------
 
-`pre-commit <https://pre-commit.com>`_ can install ``rdlfmt`` from PyPI itself,
-so contributors need nothing on their ``PATH``:
+`rdlfmt-pre-commit <https://github.com/fischeti/rdlfmt-pre-commit>`_ provides
+the hooks. It installs ``rdlfmt`` from PyPI, so contributors need nothing on
+their ``PATH`` and no Rust toolchain:
 
 .. code-block:: yaml
 
     repos:
-      - repo: local
+      - repo: https://github.com/fischeti/rdlfmt-pre-commit
+        rev: v|release|
         hooks:
           - id: rdlfmt
-            name: rdlfmt
-            entry: rdlfmt
-            language: python
-            additional_dependencies: [rdlfmt==|release|]
-            types: [file]
-            files: \.rdl$
 
-The hook rewrites the offending files, which is what you want locally: stage
-them and commit again.
+The ``rdlfmt`` hook rewrites the offending files, which is what you want
+locally: stage them and commit again. ``rdlfmt-check`` only reports them.
+
+Each tag of ``rdlfmt-pre-commit`` installs the ``rdlfmt`` release of the same
+version, so ``rev`` picks the formatter. ``pre-commit autoupdate`` moves it to
+the latest release, and so does Dependabot with:
+
+.. code-block:: yaml
+
+    version: 2
+    updates:
+      - package-ecosystem: pre-commit
+        directory: /
+        schedule:
+          interval: monthly

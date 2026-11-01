@@ -15,6 +15,18 @@ updates:
           - minor
           - patch
 
+  # Hook revisions in .pre-commit-config.yaml
+  - package-ecosystem: pre-commit
+    directory: "/"
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      pre-commit:
+        patterns:
+          - "*"
+
   # GitHub Actions used in .github/workflows
   - package-ecosystem: github-actions
     directory: "/"
