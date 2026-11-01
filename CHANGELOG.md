@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-01
+
+### Fixed
+
+- The GitHub release ships prebuilt binaries and installers again. v0.4.1 is
+  on crates.io and PyPI but has no GitHub release.
+
 ## [0.4.1] - 2026-11-01
 
 ### Fixed
@@ -121,7 +128,8 @@ First release.
   lossless rowan CST underneath. The CLI dependencies sit behind the default
   `cli` feature, so library users can turn them off.
 
-[Unreleased]: https://github.com/fischeti/rdlfmt/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/fischeti/rdlfmt/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/fischeti/rdlfmt/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/fischeti/rdlfmt/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/fischeti/rdlfmt/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/fischeti/rdlfmt/compare/v0.2.0...v0.3.0
