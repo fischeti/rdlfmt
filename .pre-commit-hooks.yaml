@@ -1,0 +1,16 @@
+- id: rdlfmt
+  name: rdlfmt (format)
+  description: "Format SystemRDL files in-place."
+  entry: rdlfmt
+  language: rust
+  types: [file]
+  files: \.rdl$
+
+- id: rdlfmt-check
+  name: rdlfmt (check)
+  description: "Verify SystemRDL file formatting without modifying them."
+  entry: rdlfmt
+  language: rust
+  types: [file]
+  files: \.rdl$
+  args: ["--check"]
